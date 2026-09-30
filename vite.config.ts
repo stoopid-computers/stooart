@@ -4,6 +4,8 @@ import { defineConfig } from "vite-plus";
 const toolingIgnores = ["tools/oxlint/anti-slop/**"];
 
 export default defineConfig({
+  // Learning scenarios launch several CLI processes on shared CI runners.
+  test: { testTimeout: 30_000 },
   fmt: { ignorePatterns: toolingIgnores },
   lint: {
     extends: [recommended],
