@@ -64,9 +64,11 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/artifacts" \
             > "$RUNNER_TEMP/candidate-artifacts.json"
           artifact_id="$(jq -er --arg name "release-$source_sha" '[.artifacts[] | select(.name == $name and .expired == false)] | if length == 1 then .[0].id else error("expected one unexpired original candidate artifact") end' "$RUNNER_TEMP/candidate-artifacts.json")"
-          echo "run_id=$run_id" >> "$GITHUB_OUTPUT"
-          echo "artifact_id=$artifact_id" >> "$GITHUB_OUTPUT"
-          echo "source_sha=$source_sha" >> "$GITHUB_OUTPUT"
+          {
+            echo "run_id=$run_id"
+            echo "artifact_id=$artifact_id"
+            echo "source_sha=$source_sha"
+          } >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           artifact-ids: ${{ steps.candidate.outputs.artifact_id }}
@@ -152,7 +154,7 @@ jobs:
         run: |
           archive="$(jq -er '.tarball.file' .stooart-release/release-metadata.json)"
           if test -n "${NPM_TOKEN:-}"; then
-            printf '//registry.npmjs.org/:_authToken=${NPM_TOKEN}\n' > "$RUNNER_TEMP/stooart.npmrc"
+            printf '%s\n' "//registry.npmjs.org/:_authToken=\${NPM_TOKEN}" > "$RUNNER_TEMP/stooart.npmrc"
             export NPM_CONFIG_USERCONFIG="$RUNNER_TEMP/stooart.npmrc"
           fi
           bunx --bun npm@12.1.0 publish ".stooart-release/$archive" --provenance --access public
