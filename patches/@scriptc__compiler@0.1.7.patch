@@ -1,8 +1,16 @@
 diff --git a/dist/backend/native-toolchain.js b/dist/backend/native-toolchain.js
-index 7515b2948501baabb5f8def01d89ad95be5caf16..01a9c01647dae3297355ab6321a1a7deef94f5b8 100644
+index 7515b2948501baabb5f8def01d89ad95be5caf16..2b5058393efdaaa54fdf8065ad93c1d718e9bc72 100644
 --- a/dist/backend/native-toolchain.js
 +++ b/dist/backend/native-toolchain.js
-@@ -3287,7 +3287,7 @@ async function compileCInternal(opts, cacheWarmOnly, cacheWarmPaths) {
+@@ -733,6 +733,7 @@ export async function compileLibArchive(opts) {
+     ];
+     const cflags = [
+         "-std=c11",
++        `-ffile-prefix-map=${resolve(rtDir, "..")}=scriptc/runtime`,
+         ...driver.targetArgs,
+         ...(sanitize
+             ? ["-O1", "-fsanitize=address", "-DSCR_RC_AUDIT"]
+@@ -3287,7 +3288,7 @@ async function compileCInternal(opts, cacheWarmOnly, cacheWarmPaths) {
          // (the scr_inspect_island.c pattern) — the emitted main calls its
          // installer exactly then.
          ...(opts.zlib && opts.dynamic ? [rt(join(rtDir, "scr_zlib_island.c"))] : []),
@@ -12,10 +20,18 @@ index 7515b2948501baabb5f8def01d89ad95be5caf16..01a9c01647dae3297355ab6321a1a7de
          // The checked-dynamic HANDLE support unit (listener gate + runtime
          // adapter closures): every referencing unit is one of the emitter or
 diff --git a/dist/backend/vendor-archives.js b/dist/backend/vendor-archives.js
-index a1ae94080b1452cff3ce153e0bc0c42d182543dc..b5f2cc12098cfe6f30356d7666c0f2b3d19d94b8 100644
+index a1ae94080b1452cff3ce153e0bc0c42d182543dc..89eeef0e52c89b0a71c3d8853621f206704bb25b 100644
 --- a/dist/backend/vendor-archives.js
 +++ b/dist/backend/vendor-archives.js
-@@ -417,6 +417,7 @@ export function createVendorArchives(context) {
+@@ -190,6 +190,7 @@ export function createVendorArchives(context) {
+         const arArgv = isZigDriver(driver) ? [...driver.argv.slice(0, 1), "ar"] : ["ar"];
+         const cflags = [
+             "-std=gnu11",
++            `-ffile-prefix-map=${vendor}=scriptc/vendor/quickjs-ng`,
+             ...driver.targetArgs,
+             "-fvisibility=hidden",
+             "-funsigned-char",
+@@ -417,6 +418,7 @@ export function createVendorArchives(context) {
                  .sort();
              const cflags = [
                  "-std=c11",
