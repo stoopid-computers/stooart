@@ -6,11 +6,11 @@
 
 ## Get started
 
-The published v0.1.0 release keeps its original package contents. v0.1.1 uses a small root package and matching per-platform npm packages. JSR provides a Deno launcher and requires a native `stooart` executable on `PATH`.
+Install from npm for the CLI, or use JSR to call it from Deno. Supported executable targets are macOS arm64 and Linux x64.
 
 ### npm with Node.js
 
-The npm package installs a small Node.js launcher and selects the matching macOS arm64 or Linux x64 executable through optional platform packages. Use Node.js 24 or newer:
+Use Node.js 24.10 or newer. npm installs the launcher and downloads only the executable for your platform:
 
 ```sh
 npm install --global @compootor/stooart
@@ -35,6 +35,29 @@ stooart route task.json
 ```
 
 With JSR, use `deno run --allow-run=stooart jsr:@compootor/stooart/cli route task.json`. The command prints a JSON recommendation. The example uses fictional workers, so replace them with workers you can use. Routing needs no API key and never launches a worker.
+
+### What gets installed
+
+Starting with v0.1.1, stooart uses scriptc instead of a bundled Bun runtime. The npm launcher requires Node.js; the standalone executable runs without an installed JavaScript runtime.
+
+| Artifact                                         | Measured size on macOS arm64 |
+| ------------------------------------------------ | ---------------------------: |
+| Standalone executable                            |                      1.83 MB |
+| Compressed platform package                      |                 About 907 KB |
+| Root npm package with launcher, docs, and skills |                  About 72 KB |
+
+These are local v0.1.1 candidate measurements, using decimal units. Release archives can differ slightly as documentation changes. The published v0.1.0 assets retain their original contents.
+
+<details>
+<summary><strong>Runtime and performance</strong> · what scriptc compiles</summary>
+
+Vite+ bundles the Effect application. scriptc's C backend builds a standalone executable that embeds QuickJS and runs that bundle in dynamic mode. It does not translate the entire Effect application into static C.
+
+In a local macOS arm64 check, routing the same fixture averaged about 26 ms with the scriptc executable and 41 ms with the bundle under Node.js. Each result covers 30 process launches after three warmups. It includes startup and routing, makes no Jev network call, and uses a timer with 10 ms resolution. It is a local comparison, not a latency guarantee.
+
+The native CLI suite covers routing, persistent credentials, journals, and verification commands. Terminal checks also cover hidden key entry and cancellation. Release CI builds and tests both supported targets before packaging.
+
+</details>
 
 ### Find the right page
 
@@ -74,7 +97,7 @@ stooart connects directly to TypeSafe, the service that runs Jev. Its client sof
 Install stooart first. The commands below work in Bash and zsh on macOS or Linux. Save the [two-worker connection request](examples/jev-setup.json) as `jev-setup.json` in your working folder before the connection check.
 
 1. Create a TypeSafe account and [API key](https://console.typesafe.ai/keys).
-2. Run `stooart jev setup`. Paste the key at the hidden prompt and press Enter. From this checkout, use `pnpm dev -- jev setup`. The key does not appear in shell history or command output.
+2. Run `stooart jev setup`. Paste the key at the hidden prompt and press Enter. From this checkout, use `pnpm dev jev setup`. The key does not appear in shell history or command output.
 
    This saves the key under `~/.config/stooart/credentials` with private file permissions. If `XDG_CONFIG_HOME` is set, stooart uses `$XDG_CONFIG_HOME/stooart/credentials` instead.
 
@@ -84,7 +107,7 @@ Install stooart first. The commands below work in Bash and zsh on macOS or Linux
    stooart route jev-setup.json --jev
    ```
 
-   From the checkout, use `pnpm dev -- route examples/jev-setup.json --jev` without copying the file.
+   From the checkout, use `pnpm dev route examples/jev-setup.json --jev` without copying the file.
 
 The [connection-check example](examples/jev-setup.json) contains two fictional, eligible workers. You do not need to install them. The check confirms that Jev can return a routing decision.
 
@@ -124,7 +147,7 @@ You can continue without Jev by omitting `--jev`. stooart then uses configured p
 <details>
 <summary><strong>Keep the connection available</strong> · sessions, native builds, and custom endpoints</summary>
 
-The saved key is available to stooart across terminal sessions and processes. To delete it, run `stooart jev remove`, or `pnpm dev -- jev remove` from the checkout. Keep the key out of repositories and chat.
+The saved key is available to stooart across terminal sessions and processes. To delete it, run `stooart jev remove`, or `pnpm dev jev remove` from the checkout. Keep the key out of repositories and chat.
 
 If `TYPESAFE_API_KEY` is set in the process environment, stooart uses that value instead of the saved key. This is useful for managed agent hosts that inject secrets. If the variable is set to an empty value, stooart treats the key as unavailable and does not fall back to the saved key.
 
@@ -149,8 +172,8 @@ When neither source is configured, ask the owner to run `stooart jev setup` or s
 ## Route a task
 
 ```sh
-pnpm dev -- route examples/task.json
-cat examples/task.json | pnpm dev -- route -
+pnpm dev route examples/task.json
+cat examples/task.json | pnpm dev route -
 ```
 
 A request has two parts: `task` describes the work, and `workers` lists available choices. Keep worker access and availability current.
@@ -249,7 +272,7 @@ Use `recall` to inspect matching procedures or `--recipes` to opt into their rec
 <details>
 <summary><strong>Use the evidence commands</strong> · input files and journal</summary>
 
-Below, `stooart` means an installed CLI. From the checkout, use `pnpm dev --` in its place. Create `verification.json` and `linked-outcome.json` using the [request formats](docs/learning.md); they are not included fixtures.
+Below, `stooart` means an installed CLI. From the checkout, use `pnpm dev` in its place. Create `verification.json` and `linked-outcome.json` using the [request formats](docs/learning.md); they are not included fixtures.
 
 ```sh
 stooart route examples/learning-task.json --journal ./journal.jsonl
@@ -289,8 +312,8 @@ Read the full request formats and runnable local exercise in [`docs/learning.md`
 <summary><strong>Keep a simple outcome log</strong> · separate from verified journal evidence</summary>
 
 ```sh
-pnpm dev -- record examples/outcome.json --log ./outcomes.jsonl
-pnpm dev -- history --log ./outcomes.jsonl
+pnpm dev record examples/outcome.json --log ./outcomes.jsonl
+pnpm dev history --log ./outcomes.jsonl
 ```
 
 Without `--log`, the path is `~/.local/state/stooart/outcomes.jsonl`. New files use mode 0600. These records store caller reports, including any `verified` label; they do not prove checks ran and never feed recipe routing. Use `--journal` for linked evidence.
@@ -306,17 +329,19 @@ Run `pnpm check` before submitting. If you change native runtime or packaging, a
 
 ### Build from source
 
-Use Node.js 24 or newer and pnpm 12.3.4:
+Use Node.js 24.10 or newer and pnpm 12.3.4:
 
 ```sh
 git clone https://github.com/stoopid-computers/stooart.git
 cd stooart
 pnpm install --frozen-lockfile
 pnpm check
-pnpm dev -- route examples/task.json
+pnpm dev route examples/task.json
 ```
 
 `pnpm check` runs Vite+ formatting, lint, types, GitHub workflow checks, and CLI/launcher tests. Run `pnpm fmt` first if you need to format edited files. To build and exercise the standalone executable for macOS arm64 or Linux x64, run:
+
+Install a C toolchain first. On macOS, use `xcode-select --install`. On Ubuntu, install `build-essential`.
 
 ```sh
 pnpm build:native

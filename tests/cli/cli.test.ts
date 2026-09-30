@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "vitest";
+import { afterAll, expect, test } from "vite-plus/test";
 import { createServer as createHttpServer } from "node:http";
 import { Schema } from "effect";
 import packageJson from "../../package.json";

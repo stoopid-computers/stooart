@@ -1,4 +1,4 @@
-import { afterAll, expect, test } from "vitest";
+import { afterAll, expect, test } from "vite-plus/test";
 import { run } from "./process.ts";
 import { join, mkdtemp, mkdir, rm, writeFile } from "../platform.ts";
 

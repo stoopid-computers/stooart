@@ -1,4 +1,4 @@
-import { test, expect } from "vitest";
+import { test, expect } from "vite-plus/test";
 import { launch, LaunchError } from "../../launcher/mod.ts";
 import { chmod, join, mkdtemp, readdir, rm, writeFile } from "../platform.ts";
 
