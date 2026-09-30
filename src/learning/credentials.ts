@@ -7,8 +7,8 @@ const failure = (detail: string, path?: string, cause?: unknown) =>
 export const credentialPath: Effect.Effect<string, LearningError, Path.Path> = Effect.gen(
   function* () {
     const paths = yield* Path.Path;
-    const home = Bun.env.HOME;
-    const configHome = Bun.env.XDG_CONFIG_HOME ?? (home ? paths.join(home, ".config") : "");
+    const home = process.env.HOME;
+    const configHome = process.env.XDG_CONFIG_HOME ?? (home ? paths.join(home, ".config") : "");
 
     if (!configHome || !paths.isAbsolute(configHome))
       return yield* cliError("jev.credentials", "configuration directory must be an absolute path");

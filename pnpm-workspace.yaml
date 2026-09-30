@@ -1,0 +1,7 @@
+allowBuilds:
+  msgpackr-extract: false
+overrides:
+  "@effect/platform-node-shared": 4.0.0-rc.112
+patchedDependencies:
+  "@scriptc/compiler@0.1.7": patches/@scriptc__compiler@0.1.7.patch
+  "@scriptc/runtime@0.1.7": patches/@scriptc__runtime@0.1.7.patch

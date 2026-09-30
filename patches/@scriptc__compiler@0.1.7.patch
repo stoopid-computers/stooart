@@ -1,0 +1,59 @@
+diff --git a/dist/backend/native-toolchain.js b/dist/backend/native-toolchain.js
+index 7515b2948501baabb5f8def01d89ad95be5caf16..01a9c01647dae3297355ab6321a1a7deef94f5b8 100644
+--- a/dist/backend/native-toolchain.js
++++ b/dist/backend/native-toolchain.js
+@@ -3287,7 +3287,7 @@ async function compileCInternal(opts, cacheWarmOnly, cacheWarmPaths) {
+         // (the scr_inspect_island.c pattern) — the emitted main calls its
+         // installer exactly then.
+         ...(opts.zlib && opts.dynamic ? [rt(join(rtDir, "scr_zlib_island.c"))] : []),
+-        ...(opts.events ? [rt(join(rtDir, "scr_events.c")), rt(join(rtDir, "scr_readline.c"))] : []),
++        ...(opts.events || dynamic ? [rt(join(rtDir, "scr_events.c")), rt(join(rtDir, "scr_readline.c"))] : []),
+         ...(opts.emitter ? [rt(join(rtDir, "scr_events_emitter.c"))] : []),
+         // The checked-dynamic HANDLE support unit (listener gate + runtime
+         // adapter closures): every referencing unit is one of the emitter or
+diff --git a/dist/backend/vendor-archives.js b/dist/backend/vendor-archives.js
+index a1ae94080b1452cff3ce153e0bc0c42d182543dc..b5f2cc12098cfe6f30356d7666c0f2b3d19d94b8 100644
+--- a/dist/backend/vendor-archives.js
++++ b/dist/backend/vendor-archives.js
+@@ -417,6 +417,7 @@ export function createVendorArchives(context) {
+                 .sort();
+             const cflags = [
+                 "-std=c11",
++                `-ffile-prefix-map=${vendor}=scriptc/vendor/mbedtls`,
+                 ...driver.targetArgs,
+                 ...(sanitize ? ["-O1", "-fsanitize=address"] : ["-Os"]),
+                 "-I", join(vendor, "include"),
+diff --git a/dist/frontend/ts7/program-adapter.js b/dist/frontend/ts7/program-adapter.js
+index dcb36eab9241e4947af48e3be0243aaad18036f7..f60c466a6157baf8b018a2f45879715b9a86cfba 100644
+--- a/dist/frontend/ts7/program-adapter.js
++++ b/dist/frontend/ts7/program-adapter.js
+@@ -122,6 +122,8 @@ export class Ts7Host {
+                 // string => virtual (or shadowed) hit; null => shadowed out of
+                 // existence; undefined => real-FS fallthrough.
+                 readFile: (fileName) => {
++                    if (fileName.startsWith("bundled://"))
++                        return undefined;
+                     const virtual = virtualFiles.get(tsgoPath(fileName));
+                     if (virtual !== undefined)
+                         return stripSourceBom(virtual);
+@@ -136,15 +138,17 @@ export class Ts7Host {
+                     return source === null ? null : stripSourceBom(source);
+                 },
+                 fileExists: (fileName) => {
++                    if (fileName.startsWith("bundled://"))
++                        return undefined;
+                     if (virtualFiles.has(tsgoPath(fileName)))
+                         return true;
+                     if (shadow !== null && shadow.hideFile(fileName))
+                         return false;
+                     return trackedFileExists(fileName);
+                 },
+-                directoryExists: (path) => trackedDirectoryExists(path),
+-                realpath: (path) => virtualFiles.has(tsgoPath(path)) ? path : (trackedRealpath(path) ?? path),
+-                getAccessibleEntries: (path) => trackedAccessibleEntries(path) ?? { files: [], directories: [] },
++                directoryExists: (path) => path.startsWith("bundled://") ? undefined : trackedDirectoryExists(path),
++                realpath: (path) => path.startsWith("bundled://") ? undefined : (virtualFiles.has(tsgoPath(path)) ? path : (trackedRealpath(path) ?? path)),
++                getAccessibleEntries: (path) => path.startsWith("bundled://") ? undefined : (trackedAccessibleEntries(path) ?? { files: [], directories: [] }),
+             },
+         });
+     }

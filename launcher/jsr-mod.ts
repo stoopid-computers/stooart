@@ -5,6 +5,7 @@ import {
   type LaunchOptions,
   type LaunchResult,
   type SpawnAdapter,
+  SpawnFailure,
 } from "./lifecycle.ts";
 
 export { LaunchError };
@@ -33,34 +34,41 @@ const signalNumbers = new Map(
 
 const denoAdapter: SpawnAdapter = {
   spawn(executable, options) {
-    let env: Record<string, string> | undefined;
+    return Effect.try({
+      try: () => {
+        let env: Record<string, string> | undefined;
 
-    if (options.env !== undefined) {
-      env = {};
+        if (options.env !== undefined) {
+          env = {};
 
-      for (const [name, value] of Object.entries({ ...Deno.env.toObject(), ...options.env })) {
-        if (value !== undefined) env[name] = value;
-      }
-    }
+          for (const [name, value] of Object.entries({ ...Deno.env.toObject(), ...options.env })) {
+            if (value !== undefined) env[name] = value;
+          }
+        }
 
-    const child = new Deno.Command(executable, {
-      args: [...(options.args ?? [])],
-      cwd: options.cwd,
-      env,
-      clearEnv: options.env !== undefined,
-      stdin: "inherit",
-      stdout: "inherit",
-      stderr: "inherit",
-    }).spawn();
+        const child = new Deno.Command(executable, {
+          args: [...(options.args ?? [])],
+          cwd: options.cwd,
+          env,
+          clearEnv: options.env !== undefined,
+          stdin: "inherit",
+          stdout: "inherit",
+          stderr: "inherit",
+        }).spawn();
 
-    return {
-      exited: child.status.then((status) => ({
-        exitCode:
-          status.code || (status.signal ? 128 + (signalNumbers.get(status.signal) ?? 1) : 0),
-        signal: status.signal,
-      })),
-      kill: (signal) => child.kill(signal),
-    };
+        return {
+          exited: Effect.promise(() => child.status).pipe(
+            Effect.map((status) => ({
+              exitCode:
+                status.code || (status.signal ? 128 + (signalNumbers.get(status.signal) ?? 1) : 0),
+              signal: status.signal,
+            })),
+          ),
+          kill: (signal: "SIGINT" | "SIGTERM") => Effect.sync(() => child.kill(signal)),
+        };
+      },
+      catch: (cause) => new SpawnFailure({ cause }),
+    });
   },
   addSignalListener: (signal, listener) => Deno.addSignalListener(signal, listener),
   removeSignalListener: (signal, listener) => Deno.removeSignalListener(signal, listener),

@@ -1,5 +1,5 @@
-#!/usr/bin/env bun
-import { BunServices } from "@effect/platform-bun";
+#!/usr/bin/env node
+import { NodeServices } from "@effect/platform-node";
 import { Console, Data, Effect, FileSystem, Path } from "effect";
 import { launchEffect } from "./mod.ts";
 
@@ -12,16 +12,23 @@ export class PackageError extends Data.TaggedError("PackageError")<{
 
 export const packagedExecutable = (platform = process.platform, arch = process.arch) =>
   Effect.gen(function* () {
-    const path = yield* Path.Path;
     const target = `${platform}-${arch}`;
+    const path = yield* Path.Path;
 
     if (!supportedTargets.has(target))
       return yield* new PackageError({ message: `stooart has no packaged binary for ${target}` });
 
-    return path.join(import.meta.dir, "bin", `stooart-${target}`);
-  }).pipe(Effect.provide(BunServices.layer));
+    return yield* path
+      .fromFileUrl(new URL(import.meta.resolve(`@compootor/stooart-${target}/bin/stooart`)))
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new PackageError({ message: `Unable to locate stooart binary for ${target}`, cause }),
+        ),
+      );
+  }).pipe(Effect.provide(NodeServices.layer));
 
-export const runPackaged = (args: readonly string[] = Bun.argv.slice(2)) =>
+export const runPackaged = (args: readonly string[] = process.argv.slice(2)) =>
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const executable = yield* packagedExecutable();
@@ -33,7 +40,7 @@ export const runPackaged = (args: readonly string[] = Bun.argv.slice(2)) =>
       });
 
     return (yield* launchEffect({ executable, args })).exitCode;
-  }).pipe(Effect.provide(BunServices.layer));
+  }).pipe(Effect.provide(NodeServices.layer));
 
 if (import.meta.main) {
   await Effect.runPromise(

@@ -16,7 +16,16 @@ export default defineConfig({
     rules: {
       "no-restricted-imports": [
         "error",
-        { patterns: [{ group: ["node:*"], message: "Use Effect platform services or Bun APIs." }] },
+        {
+          patterns: [
+            {
+              group: ["node:*"],
+              allowImportNames: ["createServer"],
+              message:
+                "Use Effect platform services where they cover the need. The createServer exception is for explicit HTTP boundaries.",
+            },
+          ],
+        },
       ],
       "oxc/no-accumulating-spread": "error",
       "anti-slop/no-array-filter-map": "error",
@@ -46,10 +55,10 @@ export default defineConfig({
   },
   pack: {
     format: "esm",
+    outExtensions: () => ({ js: ".mjs" }),
     platform: "neutral",
     target: "esnext",
-    external: [/^bun(?::|$)/],
-    deps: { alwaysBundle: [/./] },
+    deps: { alwaysBundle: [/./], onlyBundle: false },
     define: { "import.meta.env": "{}" },
     clean: false,
   },

@@ -15,7 +15,7 @@ const PackageManifest = Schema.Struct({
   description: Schema.String,
   license: Schema.String,
   repository: Schema.Struct({ type: Schema.String, url: Schema.String }),
-  engines: Schema.Struct({ bun: Schema.String }),
+  engines: Schema.Struct({ node: Schema.String }),
 });
 
 const BuildProvenance = Schema.Struct({
@@ -24,6 +24,12 @@ const BuildProvenance = Schema.Struct({
   sourceSha: Schema.NullOr(Schema.String),
   dirty: Schema.Boolean,
   sha256: Schema.String,
+  compiler: Schema.Struct({
+    name: Schema.Literal("scriptc"),
+    version: Schema.String,
+    backend: Schema.Literal("c"),
+    dynamic: Schema.Literal(true),
+  }),
 });
 
 runScript(
@@ -150,9 +156,9 @@ runScript(
 
     const launcherExit = yield* runInherited(
       [
-        "bun",
-        "--bun",
-        path.join(root, "node_modules", ".bin", "vp"),
+        "pnpm",
+        "exec",
+        "vp",
         "pack",
         "launcher/cli.ts",
         "--out-dir",
@@ -170,7 +176,7 @@ runScript(
     yield* check(launcherExit === 0, "failed to build npm launcher");
     yield* attempt(
       "Could not rename npm launcher",
-      fs.rename(path.join(stage, "cli.js"), path.join(stage, "launcher.js")),
+      fs.rename(path.join(stage, "cli.mjs"), path.join(stage, "launcher.js")),
     );
 
     const digest = (file: string) =>
@@ -212,14 +218,6 @@ runScript(
         `Could not mark ${name} executable`,
         fs.chmod(path.join(stage, "bin", name), 0o755),
       );
-      yield* attempt(
-        `Could not copy ${name} to release`,
-        fs.copyFile(source, path.join(release, name)),
-      );
-      yield* attempt(
-        `Could not mark release ${name} executable`,
-        fs.chmod(path.join(release, name), 0o755),
-      );
     }
 
     const manifestBase = {
@@ -231,9 +229,14 @@ runScript(
       bin: { stooart: "launcher.js" },
       repository: packageJson.repository,
       engines: packageJson.engines,
+      optionalDependencies: Object.fromEntries(
+        (local ? selected : targets).map((target) => [
+          `@compootor/stooart-${target}`,
+          packageJson.version,
+        ]),
+      ),
       files: [
         "launcher.js",
-        "bin",
         "README.md",
         "LICENSE",
         "THIRD_PARTY_NOTICES",
@@ -261,37 +264,100 @@ runScript(
     );
 
     const pack = yield* runPiped(
-      ["bun", "pm", "pack", "--quiet", "--ignore-scripts", "--filename", archive],
+      ["npm", "pack", "--silent", "--ignore-scripts", "--pack-destination", release],
       stage,
       "Could not create npm archive",
     );
 
     yield* check(
       pack.exitCode === 0,
-      `bun pm pack failed (${pack.exitCode}): ${pack.stderr || pack.stdout}`,
+      `npm pack failed (${pack.exitCode}): ${pack.stderr || pack.stdout}`,
     );
     yield* attempt("Could not find npm archive", fs.stat(archive));
 
-    const checksumLines: string[] = [];
+    const archives = [archive];
 
     for (const target of selected) {
       const name = `stooart-${target}`;
-      checksumLines.push(`${yield* digest(path.join(release, name))}  ${name}`);
+
+      const platformStage = yield* attempt(
+        `Could not create ${name} workspace`,
+        fs.makeTempDirectoryScoped({ prefix: `${name}-stage-` }),
+      );
+
+      yield* attempt(
+        `Could not create ${name} stage`,
+        fs.makeDirectory(path.join(platformStage, "bin"), { recursive: true }),
+      );
+      yield* attempt(
+        `Could not stage ${name} binary`,
+        fs.copyFile(path.join(root, "dist", name), path.join(platformStage, "bin", "stooart")),
+      );
+      yield* attempt(
+        `Could not mark ${name} executable`,
+        fs.chmod(path.join(platformStage, "bin", "stooart"), 0o755),
+      );
+
+      for (const notice of ["LICENSE", "THIRD_PARTY_NOTICES"])
+        yield* attempt(
+          `Could not stage ${name} ${notice}`,
+          fs.copyFile(path.join(root, notice), path.join(platformStage, notice)),
+        );
+
+      const platformManifest = {
+        name: `@compootor/${name}`,
+        version: packageJson.version,
+        description: `${packageJson.description} native executable for ${target}`,
+        license: packageJson.license,
+        repository: packageJson.repository,
+        private: local,
+        os: [target.startsWith("darwin") ? "darwin" : "linux"],
+        cpu: [target.endsWith("arm64") ? "arm64" : "x64"],
+        files: ["bin/stooart", "LICENSE", "THIRD_PARTY_NOTICES"],
+      };
+
+      yield* attempt(
+        `Could not write ${name} manifest`,
+        fs.writeFileString(
+          path.join(platformStage, "package.json"),
+          `${JSON.stringify(platformManifest, null, 2)}\n`,
+        ),
+      );
+      const platformArchive = path.join(release, `compootor-${name}-${packageJson.version}.tgz`);
+
+      const platformPack = yield* runPiped(
+        ["npm", "pack", "--silent", "--ignore-scripts", "--pack-destination", release],
+        platformStage,
+        `Could not create ${name} archive`,
+      );
+
+      yield* check(
+        platformPack.exitCode === 0,
+        `npm pack failed for ${name} (${platformPack.exitCode}): ${platformPack.stderr || platformPack.stdout}`,
+      );
+      yield* attempt(`Could not find ${name} archive`, fs.stat(platformArchive));
+      archives.push(platformArchive);
     }
 
-    checksumLines.push(`${yield* digest(archive)}  ${path.basename(archive)}`);
+    const checksumLines: string[] = [];
+
+    for (const packageArchive of archives)
+      checksumLines.push(`${yield* digest(packageArchive)}  ${path.basename(packageArchive)}`);
     yield* attempt(
       "Could not write release checksums",
       fs.writeFileString(path.join(release, "SHA256SUMS"), `${checksumLines.join("\n")}\n`),
     );
-    const archiveSha = yield* digest(archive);
+    const tarballs: { file: string; sha256: string }[] = [];
+
+    for (const packageArchive of archives)
+      tarballs.push({ file: path.basename(packageArchive), sha256: yield* digest(packageArchive) });
     yield* attempt(
       "Could not write release metadata",
       fs.writeFileString(
         path.join(release, "release-metadata.json"),
-        `${JSON.stringify({ name: packageJson.name, version: packageJson.version, sourceSha, git: { committed: Boolean(sourceSha), dirty }, local, targets: selected, tarball: { file: path.basename(archive), sha256: archiveSha } }, null, 2)}\n`,
+        `${JSON.stringify({ name: packageJson.name, version: packageJson.version, sourceSha, git: { committed: Boolean(sourceSha), dirty }, local, targets: selected, tarballs }, null, 2)}\n`,
       ),
     );
     console.log(archive);
-  }),
+  }).pipe(Effect.scoped),
 );

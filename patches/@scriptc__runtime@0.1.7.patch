@@ -1,0 +1,584 @@
+diff --git a/src/scr_events.c b/src/scr_events.c
+index 74a9b87fbdd6d6b7b89e82c1404803891fadd730..ba0fb0bb1fec3f0e109a7eaf3f49713578ed4509 100644
+--- a/src/scr_events.c
++++ b/src/scr_events.c
+@@ -737,7 +737,7 @@ static void scr_exit_atexit(void) { scr_run_exit_listeners((double)scr_exit_code
+  * parked). Registered BEFORE the exit-event atexit, so by LIFO the 'exit'
+  * listeners fire first, then everything releases, then the RC audit sees
+  * a clean heap. */
+-static void scr_events_cleanup_atexit(void) {
++void scr_events_teardown(void) {
+   scr_sig_cleanup();
+   scr_stdin_settle_done();
+   scr_stdin_drop_listeners();
+@@ -751,7 +751,7 @@ void scr_events_install(void) {
+   int stdin_flags = fcntl(0, F_GETFL, 0);
+   if (stdin_flags >= 0) (void)fcntl(0, F_SETFL, stdin_flags | O_NONBLOCK);
+ #endif
+-  atexit(scr_events_cleanup_atexit);
++  atexit(scr_events_teardown);
+   atexit(scr_exit_atexit);
+   scr_loop_set_events(&scr_events_pending, &scr_events_watching, &scr_events_dispatch,
+                        &scr_events_pollfds);
+diff --git a/src/scr_island.c b/src/scr_island.c
+index fc2b236ecf11019ea70c3a63deb302467ce075ec..999e4dfff5310d04cbdabc6f9460d2dd2039079e 100644
+--- a/src/scr_island.c
++++ b/src/scr_island.c
+@@ -461,6 +461,9 @@ static void isl_cells_teardown(void);
+ 
+ static void isl_teardown_at_exit(void) {
+   if (!isl_rt) return;
++  /* Event callbacks retain engine values. Drop them before destroying
++   * their context, regardless of native atexit registration order. */
++  scr_events_teardown();
+   /* Promise-bridge wraps whose scriptc promise never settled still hold
+    * the capability's settle functions (their waiter fibers are abandoned
+    * — never unwound): freed like the fetch transfers below so the
+@@ -2788,6 +2791,229 @@ static ScrStr *isl_arg_str(JSContext *ctx, JSValueConst v) {
+   return out;
+ }
+ 
++/* Reuse the native asynchronous child registry for embedded Node packages.
++ * Callback captures live until the native child/stream settles. */
++typedef struct {
++  size_t rc;
++  JSContext *ctx;
++  JSValue fn;
++  const char *event;
++} IslChildCallback;
++
++static void *isl_child_callback_retain(void *p) {
++  ((IslChildCallback *)p)->rc++;
++  return p;
++}
++
++static void isl_child_callback_release(void *p) {
++  IslChildCallback *h = p;
++  if (--h->rc == 0) {
++    JS_FreeValue(h->ctx, h->fn);
++    free(h);
++  }
++}
++
++static ScrClosure *isl_child_callback(JSContext *ctx, JSValueConst fn,
++                                      const char *event, void *body) {
++  IslChildCallback *h = malloc(sizeof *h);
++  if (!h) abort();
++  *h = (IslChildCallback){1, ctx, JS_DupValue(ctx, fn), event};
++  ScrBox *box = scr_box_new_obj(isl_child_callback_retain, isl_child_callback_release, NULL);
++  scr_box_set_ref(box, h);
++  ScrClosure *cb = scr_closure_new(body, 1);
++  cb->caps[0] = box;
++  return cb;
++}
++
++static void isl_child_emit(IslChildCallback *h, JSValue value, JSValue signal) {
++  JSValue args[] = {JS_NewString(h->ctx, h->event), value, signal};
++  JSValue result = JS_Call(h->ctx, h->fn, JS_UNDEFINED, 3, args);
++  for (int i = 0; i < 3; i++) JS_FreeValue(h->ctx, args[i]);
++  if (JS_IsException(result)) scr_island_bridge_exception();
++  else {
++    JS_FreeValue(h->ctx, result);
++    scr_island_drain_jobs();
++  }
++}
++
++static void isl_child_data(ScrClosure *cb, ScrBytes *bytes) {
++  IslChildCallback *h = scr_box_get_ref(cb->caps[0]);
++  isl_child_emit(h, JS_NewUint8ArrayCopy(h->ctx, bytes->data, (size_t)scr_bytes_len(bytes)), JS_UNDEFINED);
++  isl_child_callback_release(h);
++}
++
++static void isl_child_end(ScrClosure *cb) {
++  IslChildCallback *h = scr_box_get_ref(cb->caps[0]);
++  isl_child_emit(h, JS_UNDEFINED, JS_UNDEFINED);
++  isl_child_callback_release(h);
++}
++
++static void isl_child_exit(ScrClosure *cb, bool has_code, double code, const char *signal) {
++  IslChildCallback *h = scr_box_get_ref(cb->caps[0]);
++  isl_child_emit(h, has_code ? JS_NewFloat64(h->ctx, code) : JS_NULL,
++                signal ? JS_NewString(h->ctx, signal) : JS_NULL);
++  isl_child_callback_release(h);
++}
++
++static void isl_child_error(ScrClosure *cb, ScrStr *message) {
++  IslChildCallback *h = scr_box_get_ref(cb->caps[0]);
++  isl_child_emit(h, JS_NewStringLen(h->ctx, message->data, message->len), JS_UNDEFINED);
++  isl_child_callback_release(h);
++}
++
++static JSClassID isl_child_class_id;
++static JSClassID isl_event_class_id;
++
++typedef struct {
++  ScrClosure *callback;
++  double signal;
++} IslEventSubscription;
++
++static void isl_event_stop(IslEventSubscription *subscription) {
++  if (subscription->signal == 0) scr_stdin_remove_data(subscription->callback);
++  else scr_signal_off(subscription->signal, subscription->callback);
++  scr_closure_release(subscription->callback);
++  free(subscription);
++}
++
++static void isl_event_finalize(JSRuntime *rt, JSValue value) {
++  (void)rt;
++  IslEventSubscription *subscription = JS_GetOpaque(value, isl_event_class_id);
++  if (subscription) isl_event_stop(subscription);
++}
++
++static JSValue isl_host_event_stop(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv) {
++  (void)ctx; (void)self; (void)argc;
++  IslEventSubscription *subscription = JS_GetOpaque(argv[0], isl_event_class_id);
++  if (subscription) {
++    JS_SetOpaque(argv[0], NULL);
++    isl_event_stop(subscription);
++  }
++  return JS_UNDEFINED;
++}
++
++static JSValue isl_host_event_start(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv) {
++  (void)self; (void)argc;
++  double signal = 0;
++  if (JS_ToFloat64(ctx, &signal, argv[0])) return JS_EXCEPTION;
++  IslEventSubscription *subscription = malloc(sizeof *subscription);
++  if (!subscription) return JS_ThrowOutOfMemory(ctx);
++  subscription->signal = signal;
++  subscription->callback = isl_child_callback(ctx, argv[1], signal == 0 ? "data" : "signal",
++                                              signal == 0 ? (void *)isl_child_data : (void *)isl_child_end);
++  if (signal == 0) {
++    scr_stdin_on_data(scr_closure_retain(subscription->callback), isl_child_data, false);
++    scr_stdin_on_end(isl_child_callback(ctx, argv[1], "end", (void *)isl_child_end), true);
++    scr_stdin_on_error(isl_child_callback(ctx, argv[1], "error", (void *)isl_child_error), isl_child_error, true);
++  } else scr_signal_on(signal, scr_closure_retain(subscription->callback), false);
++  JSValue handle = JS_NewObjectClass(ctx, isl_event_class_id);
++  JS_SetOpaque(handle, subscription);
++  return handle;
++}
++
++static JSValue isl_host_raw_mode(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv) {
++  (void)self; (void)argc;
++  scr_process_stdin_set_raw_mode(JS_ToBool(ctx, argv[0]) > 0);
++  return scr_exc_pending() ? isl_throw_pending(ctx) : JS_UNDEFINED;
++}
++
++static void isl_child_finalize(JSRuntime *rt, JSValue value) {
++  (void)rt;
++  ScrChild *child = JS_GetOpaque(value, isl_child_class_id);
++  if (child) scr_child_release(child);
++}
++
++static ScrArr *isl_child_strings(JSContext *ctx, JSValueConst value) {
++  JSValue length = JS_GetPropertyStr(ctx, value, "length");
++  uint32_t n = 0;
++  JS_ToUint32(ctx, &n, length);
++  JS_FreeValue(ctx, length);
++  ScrArr *items = scr_arr_new(SCR_ELEM_STR, n);
++  for (uint32_t i = 0; i < n; i++) {
++    JSValue item = JS_GetPropertyUint32(ctx, value, i);
++    ScrStr *text = isl_arg_str(ctx, item);
++    JS_FreeValue(ctx, item);
++    if (!text) { scr_arr_release(items); return NULL; }
++    scr_arr_push_ref(items, text);
++  }
++  return items;
++}
++
++static JSValue isl_host_spawn(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv) {
++  (void)self;
++  if (argc != 8) return JS_ThrowTypeError(ctx, "invalid native spawn request");
++  ScrStr *command = isl_arg_str(ctx, argv[0]);
++  ScrArr *args = isl_child_strings(ctx, argv[1]);
++  ScrStr *cwd = isl_arg_str(ctx, argv[6]);
++  bool has_env = !JS_IsNull(argv[5]);
++  ScrArr *env = has_env ? isl_child_strings(ctx, argv[5]) : NULL;
++  if (!command || !args || !cwd || (has_env && !env)) {
++    if (command) scr_str_release(command);
++    if (args) scr_arr_release(args);
++    if (cwd) scr_str_release(cwd);
++    if (env) scr_arr_release(env);
++    return JS_EXCEPTION;
++  }
++  double modes[5] = {0};
++  for (uint32_t i = 0; i < 5; i++) {
++    JSValue mode = JS_GetPropertyUint32(ctx, argv[2], i);
++    JS_ToFloat64(ctx, &modes[i], mode);
++    JS_FreeValue(ctx, mode);
++  }
++  ScrChild *child = scr_spawn_opts(command, args, modes[0], modes[1], modes[2], modes[3], modes[4],
++                                  JS_ToBool(ctx, argv[3]) > 0, JS_ToBool(ctx, argv[4]) > 0,
++                                  has_env, env, cwd);
++  scr_str_release(command);
++  scr_arr_release(args);
++  scr_str_release(cwd);
++  if (env) scr_arr_release(env);
++  scr_child_on_exit(child, isl_child_callback(ctx, argv[7], "exit", (void *)isl_child_exit), isl_child_exit);
++  scr_child_on_close(child, isl_child_callback(ctx, argv[7], "close", (void *)isl_child_exit), isl_child_exit);
++  scr_child_on_error(child, isl_child_callback(ctx, argv[7], "error", (void *)isl_child_error), isl_child_error);
++  ScrChildStream *streams[] = {scr_child_stdout(child), scr_child_stderr(child)};
++  const char *events[] = {"stdout", "stderr"};
++  const char *ends[] = {"stdoutEnd", "stderrEnd"};
++  for (int i = 0; i < 2; i++) {
++    if (!streams[i]) continue;
++    scr_child_stream_on_data(streams[i], isl_child_callback(ctx, argv[7], events[i], (void *)isl_child_data), isl_child_data, false);
++    scr_child_stream_on_end(streams[i], isl_child_callback(ctx, argv[7], ends[i], (void *)isl_child_end), true);
++    scr_child_stream_release(streams[i]);
++  }
++  JSValue handle = JS_NewObjectClass(ctx, isl_child_class_id);
++  JS_SetOpaque(handle, child);
++  JS_SetPropertyStr(ctx, handle, "pid", scr_child_has_pid(child) ? JS_NewFloat64(ctx, scr_child_pid(child)) : JS_UNDEFINED);
++  return handle;
++}
++
++static JSValue isl_host_child_kill(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv) {
++  (void)self; (void)argc;
++  ScrChild *child = JS_GetOpaque2(ctx, argv[0], isl_child_class_id);
++  if (!child) return JS_EXCEPTION;
++  ScrStr *signal = isl_arg_str(ctx, argv[1]);
++  if (!signal) return JS_EXCEPTION;
++  bool killed = scr_child_kill(child, signal);
++  scr_str_release(signal);
++  return JS_NewBool(ctx, killed);
++}
++
++static JSValue isl_host_process_kill(JSContext *ctx, JSValueConst self, int argc, JSValueConst *argv) {
++  (void)self; (void)argc;
++  double pid = 0;
++  if (JS_ToFloat64(ctx, &pid, argv[0])) return JS_EXCEPTION;
++  bool killed;
++  if (JS_IsNumber(argv[1])) {
++    double signal = 0;
++    if (JS_ToFloat64(ctx, &signal, argv[1])) return JS_EXCEPTION;
++    killed = scr_process_kill(pid, signal);
++  } else {
++    ScrStr *signal = isl_arg_str(ctx, argv[1]);
++    if (!signal) return JS_EXCEPTION;
++    killed = scr_process_kill_named(pid, signal);
++    scr_str_release(signal);
++  }
++  return scr_exc_pending() ? isl_throw_pending(ctx) : JS_NewBool(ctx, killed);
++}
++
+ static JSValue isl_host_fs(JSContext *ctx, JSValueConst this_val, int argc,
+                            JSValueConst *argv) {
+   (void)this_val;
+@@ -2814,7 +3040,13 @@ static JSValue isl_host_fs(JSContext *ctx, JSValueConst this_val, int argc,
+     uint8_t *buf = JS_GetUint8Array(ctx, &len, argv[2]);
+     if (buf || len == 0) {
+       ScrStr *data = scr_str_new((const char *)buf, len);
+-      if (strcmp(op, "writeFile") == 0) scr_fs_write_file(a, data);
++      if (strcmp(op, "writeFile") == 0 && argc > 4) {
++        double flags = 0, mode = 0666;
++        JS_ToFloat64(ctx, &flags, argv[3]);
++        JS_ToFloat64(ctx, &mode, argv[4]);
++        scr_fs_write_file_flags(a, data, flags, mode);
++      }
++      else if (strcmp(op, "writeFile") == 0) scr_fs_write_file(a, data);
+       else scr_fs_append_file(a, data);
+       scr_str_release(data);
+     } else {
+@@ -3987,7 +4219,11 @@ static const char isl_modules_bootstrap[] =
+     "    return enc === null ? buf : buf.toString(enc);\n"
+     "  };\n"
+     "  const writeFileSync = (p, data, options) => {\n"
+-    "    call(\"writeFile\", pathOf(p), dataToU8(data, options));\n"
++    "    const flag = options && options.flag !== undefined ? options.flag : 'w';\n"
++    "    const flags = { w: 69, wx: 77, xw: 77, 'w+': 70, 'wx+': 78, 'xw+': 78, a: 133, ax: 141, xa: 141, 'a+': 134, 'ax+': 142, 'xa+': 142, r: 0, 'r+': 2 };\n"
++    "    if (!Object.hasOwn(flags, flag)) throw new TypeError('Unsupported fs.writeFile flag: ' + flag);\n"
++    "    const mode = options && options.mode !== undefined ? options.mode : 438;\n"
++    "    call(\"writeFile\", pathOf(p), dataToU8(data, options), flags[flag], mode);\n"
+     "  };\n"
+     "  const appendFileSync = (p, data, options) => {\n"
+     "    call(\"appendFile\", pathOf(p), dataToU8(data, options));\n"
+@@ -7981,6 +8217,35 @@ static const char isl_modules_bootstrap[] =
+     "    };\n"
+     "    const cp = {};\n"
+     "    for (const n of ['spawn', 'spawnSync', 'exec', 'execSync', 'execFile', 'execFileSync', 'fork']) cp[n] = die(n);\n"
++    "    cp.spawn = (command, args = [], options = {}) => {\n"
++    "      if (typeof command !== 'string' || !Array.isArray(args) || args.some(a => typeof a !== 'string')) throw new TypeError('spawn requires a command and string arguments');\n"
++    "      if (options.uid !== undefined || options.gid !== undefined || options.timeout !== undefined || typeof options.shell === 'string') throw new Error('Unsupported scriptc spawn options');\n"
++    "      const stdio = Array.isArray(options.stdio) ? options.stdio : Array(3).fill(options.stdio ?? 'pipe');\n"
++    "      if (stdio.length !== 3 || stdio[0] === 'pipe' || typeof stdio[0] === 'number') throw new Error('scriptc spawn supports ignored or inherited stdin and three stdio descriptors');\n"
++    "      const mode = s => { if (s === 'ignore') return 0; if (s === 'inherit') return 1; if (s === 'pipe') return 3; if (Number.isInteger(s) && s >= 0) return 2; throw new TypeError('Unsupported spawn stdio'); };\n"
++    "      const child = new (builtins.events())();\n"
++    "      const { PassThrough } = builtins.stream();\n"
++    "      child.stdin = null;\n"
++    "      child.stdout = stdio[1] === 'pipe' ? new PassThrough() : null;\n"
++    "      child.stderr = stdio[2] === 'pipe' ? new PassThrough() : null;\n"
++    "      child.stdio = [child.stdin, child.stdout, child.stderr];\n"
++    "      child.exitCode = null; child.signalCode = null; child.killed = false;\n"
++    "      const onEvent = (event, value, signal) => {\n"
++    "        if (event === 'stdout' || event === 'stderr') { child[event].write(builtins.buffer().Buffer.from(value)); return; }\n"
++    "        if (event === 'stdoutEnd' || event === 'stderrEnd') { child[event.slice(0, -3)].end(); return; }\n"
++    "        if (event === 'exit') { child.exitCode = value; child.signalCode = signal; }\n"
++    "        if (event === 'error') { const error = new Error(value); const match = /\\b(E[A-Z0-9]+)$/.exec(value); if (match) error.code = match[1]; child.emit(event, error); return; }\n"
++    "        child.emit(event, value, signal);\n"
++    "      };\n"
++    "      const env = options.env === undefined ? null : Object.entries(options.env).filter(([, v]) => v !== undefined).flatMap(([k, v]) => [k, String(v)]);\n"
++    "      const handle = host.spawn(command, args, [...stdio.map(mode), typeof stdio[1] === 'number' ? stdio[1] : 0, typeof stdio[2] === 'number' ? stdio[2] : 0], !!options.detached, !!options.shell, env, options.cwd ?? '', onEvent);\n"
++    "      child.pid = handle.pid;\n"
++    "      child.kill = (signal = 'SIGTERM') => { const result = host.childKill(handle, signal); if (result) child.killed = true; return result; };\n"
++    "      child.ref = () => child;\n"
++    "      child.unref = () => { throw new Error('scriptc spawn unref is not implemented'); };\n"
++    "      if (child.pid !== undefined) queueMicrotask(() => child.emit('spawn'));\n"
++    "      return child;\n"
++    "    };\n"
+     "    cp.default = cp;\n"
+     "    return cp;\n"
+     "  });\n"
+@@ -8290,6 +8555,7 @@ static const char isl_modules_bootstrap[] =
+      * Node writes). Terminal echo/keypress machinery is inert. */
+     "  builtins.readline = memo(() => {\n"
+     "    const EventEmitter = builtins.events();\n"
++    "    const keypressStreams = new WeakSet();\n"
+     "    class Interface extends EventEmitter {\n"
+     "      constructor(input, output, completer, terminal) {\n"
+     "        super();\n"
+@@ -8304,12 +8570,16 @@ static const char isl_modules_bootstrap[] =
+     "        this.line = '';\n"
+     "        this.cursor = 0;\n"
+     "        this._onData = (chunk) => {\n"
+-    "          this._buf += typeof chunk === 'string' ? chunk : chunk.toString('utf8');\n"
+-    "          let i;\n"
+-    "          while ((i = this._buf.indexOf('\\n')) >= 0) {\n"
+-    "            let line = this._buf.slice(0, i);\n"
+-    "            if (line.endsWith('\\r')) line = line.slice(0, -1);\n"
+-    "            this._buf = this._buf.slice(i + 1);\n"
++    "          const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');\n"
++    "          for (const ch of text) {\n"
++    "            if (ch === '\\n' && this._lastCR) { this._lastCR = false; continue; }\n"
++    "            this._lastCR = ch === '\\r';\n"
++    "            if (ch === '\\x03' && this.input.isTTY) { process.emit('SIGINT'); return; }\n"
++    "            if ((ch === '\\x7f' || ch === '\\b') && this.input.isTTY) { this._buf = Array.from(this._buf).slice(0, -1).join(''); continue; }\n"
++    "            if (ch === '\\x04' && this.input.isTTY) { this._onEnd(); return; }\n"
++    "            if (ch !== '\\r' && ch !== '\\n') { this._buf += ch; continue; }\n"
++    "            const line = this._buf;\n"
++    "            this._buf = '';\n"
+     /* a pending question consumes the line — Node's Interface answers
+      * the question without emitting 'line' for that row */
+     "            const q = this._questions && this._questions.shift();\n"
+@@ -8317,7 +8587,15 @@ static const char isl_modules_bootstrap[] =
+     "            else this.emit('line', line);\n"
+     "          }\n"
+     "        };\n"
+-    "        this._onEnd = () => this.close();\n"
++    "        this._onEnd = () => {\n"
++    "          if (this._buf.length > 0) {\n"
++    "            const line = this._buf;\n"
++    "            this._buf = '';\n"
++    "            const q = this._questions && this._questions.shift();\n"
++    "            if (q !== undefined) q(line); else this.emit('line', line);\n"
++    "          }\n"
++    "          this.close();\n"
++    "        };\n"
+     "        if (this.input && typeof this.input.on === 'function') {\n"
+     "          this.input.on('data', this._onData);\n"
+     "          this.input.on('end', this._onEnd);\n"
+@@ -8347,6 +8625,7 @@ static const char isl_modules_bootstrap[] =
+     "        if (this.input && typeof this.input.removeListener === 'function') {\n"
+     "          this.input.removeListener('data', this._onData);\n"
+     "          this.input.removeListener('end', this._onEnd);\n"
++    "          this.input.pause();\n"
+     "        }\n"
+     "        this.emit('close');\n"
+     "      }\n"
+@@ -8386,7 +8665,20 @@ static const char isl_modules_bootstrap[] =
+     "        if (dy < 0) s += '\\u001b[' + (-dy) + 'A'; else if (dy > 0) s += '\\u001b[' + dy + 'B';\n"
+     "        return wr(stream, s, cb);\n"
+     "      },\n"
+-    "      emitKeypressEvents: () => {},\n"
++    "      emitKeypressEvents: stream => {\n"
++    "        if (keypressStreams.has(stream)) return;\n"
++    "        keypressStreams.add(stream);\n"
++    "        stream.on('data', chunk => {\n"
++    "          const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');\n"
++    "          const names = { '\\r': 'return', '\\n': 'enter', '\\x7f': 'backspace', '\\b': 'backspace', '\\t': 'tab', '\\x1b[A': 'up', '\\x1b[B': 'down', '\\x1b[C': 'right', '\\x1b[D': 'left', '\\x1b[H': 'home', '\\x1b[F': 'end', '\\x1b[3~': 'delete' };\n"
++    "          for (const value of text.match(/\\x1b\\[[0-9;]*[A-Za-z~]|[\\s\\S]/gu) ?? []) {\n"
++    "            const code = value.codePointAt(0);\n"
++    "            const ctrl = code > 0 && code < 27 && names[value] === undefined;\n"
++    "            const name = names[value] ?? (ctrl ? String.fromCharCode(code + 96) : value.toLowerCase());\n"
++    "            stream.emit('keypress', value, { name, ctrl, meta: false, shift: value.length === 1 && value !== value.toLowerCase(), sequence: value });\n"
++    "          }\n"
++    "        });\n"
++    "      },\n"
+     "    };\n"
+     "    rl.default = rl;\n"
+     "    return rl;\n"
+@@ -9135,25 +9427,21 @@ static const char isl_modules_bootstrap[] =
+     "  builtins.process = memo(() => {\n"
+     "    const argv = host.argv();\n"
+     "    const stream = (fd) => {\n"
+-    "      const s = { fd, write: (str) => host.write(fd, String(str)) };\n"
++    "      const { Writable } = builtins.stream();\n"
++    "      const s = new Writable({\n"
++    "        decodeStrings: false,\n"
++    "        write(chunk, encoding, callback) {\n"
++    "          try { host.write(fd, String(chunk)); }\n"
++    "          catch (error) { callback(error); return; }\n"
++    "          callback();\n"
++    "        },\n"
++    "      });\n"
++    "      s.fd = fd;\n"
+     "      if (host.isatty(fd)) {\n"
+     "        s.isTTY = true;\n"
+     "        const c = host.columns(fd);\n"
+     "        if (c > 0) s.columns = c;\n"
+     "      }\n"
+-    /* listener surface, accepted-and-inert (the epipebomb shape:
+-     * stream.on('error', ...) + stream.listeners('error') at module
+-     * evaluation) — island stdio writes are synchronous host writes, so
+-     * these events never fire; registration must still succeed. */
+-    "      s.on = () => s;\n"
+-    "      s.once = () => s;\n"
+-    "      s.addListener = () => s;\n"
+-    "      s.off = () => s;\n"
+-    "      s.removeListener = () => s;\n"
+-    "      s.removeAllListeners = () => s;\n"
+-    "      s.listeners = () => [];\n"
+-    "      s.listenerCount = () => 0;\n"
+-    "      s.emit = () => false;\n"
+     "      return s;\n"
+     "    };\n"
+     "    const p = {\n"
+@@ -9188,26 +9476,34 @@ static const char isl_modules_bootstrap[] =
+     "      stdin: (() => {\n"
+     "        const { Readable } = builtins.stream();\n"
+     "        const Buffer = builtins.buffer().Buffer;\n"
+-    "        let pulled = false;\n"
++    "        let subscription;\n"
++    "        let ended = false;\n"
++    "        const stop = () => { if (subscription) host.eventStop(subscription); subscription = undefined; };\n"
++    "        const start = () => {\n"
++    "          if (subscription || ended) return;\n"
++    "          subscription = host.eventStart(0, (event, value) => {\n"
++    "            if (event === 'data') s.push(Buffer.from(value));\n"
++    "            else if (event === 'end') { ended = true; stop(); s.push(null); }\n"
++    "            else { ended = true; stop(); s.destroy(new Error(value)); }\n"
++    "          });\n"
++    "        };\n"
+     "        const s = new Readable({\n"
+-    "          read() {\n"
+-    "            if (pulled) return;\n"
+-    "            pulled = true;\n"
+-    "            const data = host.readStdin();\n"
+-    "            if (data.byteLength > 0) this.push(Buffer.from(data));\n"
+-    "            this.push(null);\n"
+-    "          },\n"
++    "          read: start,\n"
++    "          destroy(error, callback) { ended = true; stop(); callback(error); },\n"
+     "        });\n"
++    "        s.pause = () => { stop(); return Readable.prototype.pause.call(s); };\n"
++    "        s.resume = () => { start(); return Readable.prototype.resume.call(s); };\n"
+     "        s.fd = 0;\n"
+     /* Node's process.stdin is a tty.ReadStream only when fd 0 IS a tty
+      * — pipes get a socket with NO setRawMode, and packages probe with
+      * `process.stdin.setRawMode?.()`. Mirror the shape, not a stub. */
+-    "        if (host.isatty(0)) { s.isTTY = true; s.setRawMode = () => s; }\n"
++    "        if (host.isatty(0)) { s.isTTY = true; s.setRawMode = raw => { host.rawMode(!!raw); s.isRaw = !!raw; return s; }; }\n"
+     "        s.unref = () => s;\n"
+     "        s.ref = () => s;\n"
+     "        return s;\n"
+     "      })(),\n"
+     "      cwd: () => host.cwd(),\n"
++    "      kill: (pid, signal = 'SIGTERM') => host.processKill(pid, signal),\n"
+     "      exit: (code) => {\n"
+     "        host.exit(code === undefined || code === null ? Number(p.exitCode ?? 0) : Number(code));\n"
+     "      },\n"
+@@ -9263,6 +9559,19 @@ static const char isl_modules_bootstrap[] =
+     "      },\n"
+     "    });\n"
+     "    p.default = p;\n"
++    "    const events = new (builtins.events())();\n"
++    "    const subscriptions = new Map();\n"
++    "    const signals = host.signals();\n"
++    "    const cleanup = name => { if (events.listenerCount(name) === 0 && subscriptions.has(name)) { host.eventStop(subscriptions.get(name)); subscriptions.delete(name); } };\n"
++    "    const listen = (name, fn, once) => {\n"
++    "      events[once ? 'once' : 'on'](name, fn);\n"
++    "      if (signals[name] !== undefined && !subscriptions.has(name)) subscriptions.set(name, host.eventStart(signals[name], () => { events.emit(name); cleanup(name); }));\n"
++    "      return p;\n"
++    "    };\n"
++    "    p.on = p.addListener = (name, fn) => listen(name, fn, false);\n"
++    "    p.once = (name, fn) => listen(name, fn, true);\n"
++    "    p.off = p.removeListener = (name, fn) => { events.removeListener(name, fn); cleanup(name); return p; };\n"
++    "    p.emit = (name, ...args) => { const result = events.emit(name, ...args); cleanup(name); return result; };\n"
+     "    return p;\n"
+     "  });\n"
+     "  globalThis.process = builtins.process();\n"
+@@ -9330,6 +9639,13 @@ static void isl_install_url_class(void);
+ 
+ static void isl_modules_boot(void) {
+   isl_install_url_class();
++  scr_events_install();
++  JS_NewClassID(isl_rt, &isl_child_class_id);
++  const JSClassDef child_class = { .class_name = "NativeChild", .finalizer = isl_child_finalize };
++  JS_NewClass(isl_rt, isl_child_class_id, &child_class);
++  JS_NewClassID(isl_rt, &isl_event_class_id);
++  const JSClassDef event_class = { .class_name = "NativeEvent", .finalizer = isl_event_finalize };
++  JS_NewClass(isl_rt, isl_event_class_id, &event_class);
+   JSValue fn = JS_Eval(isl_ctx, isl_modules_bootstrap, sizeof isl_modules_bootstrap - 1,
+                        "<scr-modules>", JS_EVAL_TYPE_GLOBAL);
+   if (JS_IsException(fn)) {
+@@ -9341,6 +9657,12 @@ static void isl_modules_boot(void) {
+   JS_SetPropertyStr(isl_ctx, host, "source", JS_NewCFunction(isl_ctx, isl_host_source, "source", 1));
+   JS_SetPropertyStr(isl_ctx, host, "resolve", JS_NewCFunction(isl_ctx, isl_host_resolve, "resolve", 2));
+   JS_SetPropertyStr(isl_ctx, host, "argv", JS_NewCFunction(isl_ctx, isl_host_argv, "argv", 0));
++  JS_SetPropertyStr(isl_ctx, host, "spawn", JS_NewCFunction(isl_ctx, isl_host_spawn, "spawn", 8));
++  JS_SetPropertyStr(isl_ctx, host, "childKill", JS_NewCFunction(isl_ctx, isl_host_child_kill, "childKill", 2));
++  JS_SetPropertyStr(isl_ctx, host, "processKill", JS_NewCFunction(isl_ctx, isl_host_process_kill, "processKill", 2));
++  JS_SetPropertyStr(isl_ctx, host, "eventStart", JS_NewCFunction(isl_ctx, isl_host_event_start, "eventStart", 2));
++  JS_SetPropertyStr(isl_ctx, host, "eventStop", JS_NewCFunction(isl_ctx, isl_host_event_stop, "eventStop", 1));
++  JS_SetPropertyStr(isl_ctx, host, "rawMode", JS_NewCFunction(isl_ctx, isl_host_raw_mode, "rawMode", 1));
+   JS_SetPropertyStr(isl_ctx, host, "env", JS_NewCFunction(isl_ctx, isl_host_env, "env", 0));
+   JS_SetPropertyStr(isl_ctx, host, "write", JS_NewCFunction(isl_ctx, isl_host_write, "write", 2));
+   JS_SetPropertyStr(isl_ctx, host, "readStdin",
+diff --git a/src/scr_lib.c b/src/scr_lib.c
+index 789e4c5c52cb91df0d00a3a4ce03b301956b7c69..56dd60d08f4cba21fd00e5dc5961a1caab3575ac 100644
+--- a/src/scr_lib.c
++++ b/src/scr_lib.c
+@@ -2038,6 +2038,10 @@ void scr_fs_write_file(ScrStr *path, ScrStr *data) {
+  * existing file keeps its permissions, exactly Node (which never chmods
+  * here). Same error shapes as the plain form. */
+ void scr_fs_write_file_mode(ScrStr *path, ScrStr *data, double mode) {
++  scr_fs_write_file_flags(path, data, 1 | 4 | 64, mode);
++}
++
++void scr_fs_write_file_flags(ScrStr *path, ScrStr *data, double flags, double mode) {
+   char recv[48], msg[176];
+   scr_num_received(mode, recv);
+   if (!(isfinite(mode) && trunc(mode) == mode)) {
+@@ -2056,11 +2060,8 @@ void scr_fs_write_file_mode(ScrStr *path, ScrStr *data, double mode) {
+   }
+   /* O_BINARY: zero on POSIX; on Windows it keeps the CRT from translating
+    * \n in these byte-exact writes (fopen's "wb" path already does). */
+-  int fd = open(path->data, O_WRONLY | O_CREAT | O_TRUNC | O_BINARY, (mode_t)mode);
+-  if (fd < 0) {
+-    scr_fs_throw(errno, "open", path);
+-    return;
+-  }
++  int fd = (int)scr_fs_open_numeric(path, flags, mode);
++  if (scr_exc_pending()) return;
+   size_t at = 0;
+   while (at < data->len) {
+     ssize_t wrote = write(fd, data->data + at, data->len - at);
+diff --git a/src/scr_runtime.h b/src/scr_runtime.h
+index ef353ee311e7411d2c2e4e8f1026b25d0aaaaea9..6aff98e5170ed55ac1a71481ed94210fd54e5334 100644
+--- a/src/scr_runtime.h
++++ b/src/scr_runtime.h
+@@ -2408,6 +2408,7 @@ void scr_fs_rename(ScrStr *oldpath, ScrStr *newpath);
+ int scr_fs_rename_raw(const ScrStr *oldpath, const ScrStr *newpath);
+ void scr_fs_rename_error(int error, const ScrStr *oldpath, const ScrStr *newpath);
+ void scr_fs_write_file_mode(ScrStr *path, ScrStr *data, double mode);
++void scr_fs_write_file_flags(ScrStr *path, ScrStr *data, double flags, double mode);
+ void scr_fs_mkdir_mode(ScrStr *path, double mode);
+ void scr_fs_mkdir_recursive_mode(ScrStr *path, double mode);
+ 
+@@ -4354,6 +4355,7 @@ void scr_nticks_teardown(void);
+  * loop alive, like Node's flowing stdin. */
+ typedef struct ScrBytes ScrBytes; /* full definition below (C11 repeat) */
+ void scr_events_install(void);
++void scr_events_teardown(void);
+ void scr_signal_on(double signum, ScrClosure *cb, bool once);
+ void scr_signal_off(double signum, ScrClosure *cb);
+ void scr_process_on_exit(ScrClosure *cb, void (*fn)(ScrClosure *, double), bool once);

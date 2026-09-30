@@ -15,7 +15,7 @@ Start with [the example request](references/request.json). Replace its task and 
 
 ## Get a recommendation
 
-Run `stooart route <request.json|->`, or from this repository run `bun run dev -- route <request.json|->`. By default, stooart selects the eligible worker with the lowest priority number, then worker ID. If Jev is configured and applies, `--jev` asks it to choose among eligible workers. Keep credentials out of the request.
+Run `stooart route <request.json|->`, or from this repository run `pnpm dev route <request.json|->`. By default, stooart selects the eligible worker with the lowest priority number, then worker ID. If Jev is configured and applies, `--jev` asks it to choose among eligible workers. Keep credentials out of the request.
 
 Read the top-level `executor`, `model`, `effort`, `workerId`, `reason`, `eligibleWorkerIds`, `rejected`, and `policyVersion` fields. Check `failureKind` when present. `local` keeps the task with the caller. `script` recommends a scoped deterministic operation. A worker result is only a recommendation. Before using it, match its ID and configuration to the profile you supplied.
 

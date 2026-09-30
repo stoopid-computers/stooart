@@ -3,6 +3,7 @@ import type { TaskInput, WorkerInput } from "../core/schemas.ts";
 import type { Task, TaskFeatures, WorkerProfile, Recommendation } from "../core/types.ts";
 import type { Procedure } from "./contracts.ts";
 import { sameWorker, type ValidatedJournal } from "./journal.ts";
+import { sha256 } from "./hash.ts";
 
 export const RECIPE_TTL_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -107,7 +108,7 @@ export function buildRecipes(
 
     if (!recipe) {
       recipe = {
-        id: `recipe-${new Bun.CryptoHasher("sha256").update(key).digest("hex").slice(0, 24)}`,
+        id: `recipe-${sha256(key).slice(0, 24)}`,
         version: 1,
         projectId: task.projectId,
         kind: task.kind,

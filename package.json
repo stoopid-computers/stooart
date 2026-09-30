@@ -1,6 +1,6 @@
 {
   "name": "@compootor/stooart",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Policy-first task routing with Effect and optional Jev selection",
   "license": "MIT",
@@ -11,39 +11,36 @@
   "type": "module",
   "scripts": {
     "prepare": "effect-tsgo patch --oxlint --force",
-    "dev": "bun run src/cli.ts",
-    "test": "bun test",
+    "dev": "node --experimental-strip-types src/cli.ts",
+    "test": "vp test",
     "typecheck": "tsc --noEmit",
     "lint": "vp lint --type-aware",
-    "lint:actions": "bun run --bun actionlint",
+    "lint:actions": "actionlint",
     "fmt": "vp fmt",
-    "check": "vp check && bun run lint:actions && bun test",
-    "build:native": "bun run scripts/build-native.ts",
-    "test:native": "bun run scripts/smoke-native.ts",
-    "pack:local": "bun run scripts/pack.ts --local",
-    "release:pack": "bun run scripts/pack.ts",
-    "release:verify": "bun run scripts/verify-release.ts"
+    "check": "vp check && pnpm lint:actions && pnpm test",
+    "build:native": "node --experimental-strip-types scripts/build-native.ts",
+    "test:native": "node --experimental-strip-types scripts/smoke-native.ts",
+    "pack:local": "node --experimental-strip-types scripts/pack.ts --local",
+    "release:pack": "node --experimental-strip-types scripts/pack.ts",
+    "release:verify": "node --experimental-strip-types scripts/verify-release.ts"
   },
   "dependencies": {
     "@compootor/effective-jev": "0.0.4",
-    "@effect/platform-bun": "4.0.0-rc.112",
+    "@effect/platform-node": "4.0.0-rc.112",
     "effect": "4.0.0-rc.112"
   },
   "devDependencies": {
     "@effect/tsgo": "0.47.0",
     "@kjanat/actionlint": "1.17.0",
-    "@oxlint/plugins": "1.86.0",
-    "@types/bun": "1.4.2",
+    "@oxlint/plugins": "1.79.0",
+    "@scriptc/compiler": "0.1.7",
     "@types/deno": "2.7.0",
-    "oxlint": "1.86.0",
+    "@types/node": "24.10.0",
     "typescript": "7.0.2",
     "vite-plus": "1.0.0"
   },
-  "overrides": {
-    "@effect/platform-node-shared": "4.0.0-rc.112"
-  },
   "engines": {
-    "bun": ">=1.4.2"
+    "node": ">=24.10.0"
   },
-  "packageManager": "bun@1.4.2"
+  "packageManager": "pnpm@12.3.4"
 }

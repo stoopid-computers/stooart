@@ -5,7 +5,7 @@ Use an explicitly chosen JSONL journal to record routing decisions and checked o
 ## 1. Save a routing decision
 
 ```sh
-bun run src/cli.ts route examples/learning-task.json --journal ./journal.jsonl
+pnpm dev route examples/learning-task.json --journal ./journal.jsonl
 ```
 
 The output adds `decisionId` and `recordedAt` to the recommendation. The journal stores candidate profiles, policy version, selected worker configuration, strategy, and a task snapshot. It omits the raw goal, acceptance prose, and allowed paths.
@@ -33,8 +33,8 @@ For later retrieval, supply a stable `projectId`. Give related attempts from the
   "verifier": {
     "id": "project-check",
     "version": "1",
-    "command": "bun",
-    "args": ["run", "check"],
+    "command": "pnpm",
+    "args": ["check"],
     "cwd": "/absolute/path/to/stooart",
     "timeoutMs": 120000
   }
@@ -75,10 +75,10 @@ Use the status that matches what happened: `verified`, `accepted`, `failed`, `en
 ## 4. Retrieve procedures or evaluate routes
 
 ```sh
-bun run src/cli.ts recipes --journal ./journal.jsonl
-bun run src/cli.ts recall examples/learning-task.json --journal ./journal.jsonl
-bun run src/cli.ts route examples/learning-task.json --recipes --journal ./journal.jsonl
-bun run src/cli.ts eval --journal ./journal.jsonl --after 2000-01-01T00:00:00.000Z
+pnpm dev recipes --journal ./journal.jsonl
+pnpm dev recall examples/learning-task.json --journal ./journal.jsonl
+pnpm dev route examples/learning-task.json --recipes --journal ./journal.jsonl
+pnpm dev eval --journal ./journal.jsonl --after 2000-01-01T00:00:00.000Z
 ```
 
 `recipes` lists versioned candidates from recorded procedures and outcomes. `recall` shows matches and a recommendation. A match must share the project, task kind, features, required tools, and worker configuration: ID, executor, model, provider, effort, and tools. It also needs a verified outcome, the current policy version, and a verification receipt less than 90 days old. Worker and provider restrictions, availability, cooldowns, scope, and research-delegation policy still apply.
@@ -89,17 +89,17 @@ Matches sort by the observed verified fraction among verified and failed attempt
 
 ## Runnable local example
 
-Try the full evidence loop from the stooart checkout. It uses a fictional worker and checks the `src` directory. You need Bun and jq:
+Try the full evidence loop from the stooart checkout. It uses a fictional worker and checks the `src` directory. Install the project dependencies first. You need Node.js 24.10 or newer, pnpm, and jq:
 
 ```sh
 demo_dir=$(mktemp -d)
 journal="$demo_dir/journal.jsonl"
-bun run src/cli.ts route examples/learning-task.json --journal "$journal" > "$demo_dir/decision.json"
+pnpm --silent dev route examples/learning-task.json --journal "$journal" > "$demo_dir/decision.json"
 jq -n --slurpfile decision "$demo_dir/decision.json" --arg cwd "$PWD" '{
   decisionId: $decision[0].decisionId, attemptId: "demo-attempt", artifactPath: "src",
-  verifier: {id: "stooart-check", version: "1", command: "bun", args: ["run", "check"], cwd: $cwd, timeoutMs: 120000}
+  verifier: {id: "stooart-check", version: "1", command: "pnpm", args: ["check"], cwd: $cwd, timeoutMs: 120000}
 }' > "$demo_dir/verification.json"
-bun run src/cli.ts verify "$demo_dir/verification.json" --journal "$journal" > "$demo_dir/receipt.json"
+pnpm --silent dev verify "$demo_dir/verification.json" --journal "$journal" > "$demo_dir/receipt.json"
 jq -n --slurpfile decision "$demo_dir/decision.json" --slurpfile receipt "$demo_dir/receipt.json" '{
   decisionId: $decision[0].decisionId, taskId: "check-project", attemptId: "demo-attempt",
   workerId: $decision[0].workerId, status: "verified", verificationId: $receipt[0].id,
@@ -107,8 +107,8 @@ jq -n --slurpfile decision "$demo_dir/decision.json" --slurpfile receipt "$demo_
   correctionCount: 0, checks: ["stooart-check"],
   procedure: {id: "check-project", version: "1", steps: ["Run the existing project check"], preconditions: ["Dependencies installed"]}
 }' > "$demo_dir/outcome.json"
-bun run src/cli.ts record "$demo_dir/outcome.json" --journal "$journal"
-bun run src/cli.ts recall examples/learning-task.json --journal "$journal"
+pnpm dev record "$demo_dir/outcome.json" --journal "$journal"
+pnpm dev recall examples/learning-task.json --journal "$journal"
 ```
 
 ## Journal files and recovery

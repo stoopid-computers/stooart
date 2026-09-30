@@ -1,4 +1,4 @@
-import { BunRuntime, BunServices } from "@effect/platform-bun";
+import { NodeRuntime, NodeServices } from "@effect/platform-node";
 import { Crypto, Data, Effect, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
@@ -87,6 +87,6 @@ export function sha256(data: Uint8Array) {
   });
 }
 
-export function runScript<A, E>(program: Effect.Effect<A, E, BunServices.BunServices>) {
-  BunRuntime.runMain(program.pipe(Effect.provide(BunServices.layer)));
+export function runScript<A, E>(program: Effect.Effect<A, E, NodeServices.NodeServices>) {
+  NodeRuntime.runMain(program.pipe(Effect.provide(NodeServices.layer)));
 }

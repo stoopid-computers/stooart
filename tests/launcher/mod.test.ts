@@ -1,4 +1,4 @@
-import { test, expect } from "bun:test";
+import { test, expect } from "vitest";
 import { launch, LaunchError } from "../../launcher/mod.ts";
 import { chmod, join, mkdtemp, readdir, rm, writeFile } from "../platform.ts";
 
@@ -59,12 +59,12 @@ test("launch merges environment overrides and removes undefined values", async (
   const executable = join(dir, "fixture");
   const inheritedName = "STOOART_LAUNCHER_INHERITED_TEST";
   const removedName = "STOOART_LAUNCHER_REMOVED_TEST";
-  const previousInherited = Bun.env[inheritedName];
-  const previousRemoved = Bun.env[removedName];
+  const previousInherited = process.env[inheritedName];
+  const previousRemoved = process.env[removedName];
 
   try {
-    Bun.env[inheritedName] = "inherited";
-    Bun.env[removedName] = "remove-me";
+    process.env[inheritedName] = "inherited";
+    process.env[removedName] = "remove-me";
     await writeFile(
       executable,
       '#!/bin/sh\ntest "$STOOART_LAUNCHER_INHERITED_TEST" = inherited || exit 31\ntest -z "${STOOART_LAUNCHER_REMOVED_TEST+x}" || exit 32\ntest "$STOOART_LAUNCHER_OVERRIDE_TEST" = overridden || exit 33\nexit 0\n',
@@ -78,11 +78,11 @@ test("launch merges environment overrides and removes undefined values", async (
       }),
     ).toMatchObject({ exitCode: 0, signal: null });
   } finally {
-    if (previousInherited === undefined) delete Bun.env[inheritedName];
-    else Bun.env[inheritedName] = previousInherited;
+    if (previousInherited === undefined) delete process.env[inheritedName];
+    else process.env[inheritedName] = previousInherited;
 
-    if (previousRemoved === undefined) delete Bun.env[removedName];
-    else Bun.env[removedName] = previousRemoved;
+    if (previousRemoved === undefined) delete process.env[removedName];
+    else process.env[removedName] = previousRemoved;
     await rm(dir);
   }
 });

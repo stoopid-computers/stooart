@@ -1,11 +1,13 @@
-import { BunServices } from "@effect/platform-bun";
+import { NodeServices } from "@effect/platform-node";
 import { Effect, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { join } from "../platform.ts";
 
-const executable = Bun.env.STOOART_TEST_BINARY;
+const executable = process.env.STOOART_TEST_BINARY;
 
-const prefix = executable ? [executable] : [Bun.argv[0], join(import.meta.dir, "../../src/cli.ts")];
+const prefix = executable
+  ? [executable]
+  : [process.execPath, "--experimental-strip-types", join(import.meta.dirname, "../../src/cli.ts")];
 
 export const run = (
   args: readonly string[],
@@ -62,5 +64,5 @@ export const run = (
       );
 
       return { stdout, stderr, code: Number(code) };
-    }).pipe(Effect.scoped, Effect.provide(BunServices.layer)),
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
   );

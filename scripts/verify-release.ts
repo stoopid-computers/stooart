@@ -6,7 +6,7 @@ const ReleaseMetadata = Schema.Struct({
   sourceSha: Schema.String,
   local: Schema.Boolean,
   targets: Schema.Array(Schema.String),
-  tarball: Schema.Struct({ file: Schema.String, sha256: Schema.String }),
+  tarballs: Schema.Array(Schema.Struct({ file: Schema.String, sha256: Schema.String })),
 });
 
 runScript(
@@ -17,7 +17,8 @@ runScript(
 
     if (!metadataPath || !checksumsPath)
       return yield* new ScriptError({
-        message: "usage: bun run scripts/verify-release.ts <metadata.json> <SHA256SUMS>",
+        message:
+          "usage: node --experimental-strip-types scripts/verify-release.ts <metadata.json> <SHA256SUMS>",
       });
 
     const metadataText = yield* attempt(
@@ -37,7 +38,10 @@ runScript(
     yield* check(!metadata.local, "local archives cannot be released");
     yield* check(
       Boolean(
-        metadata.version && metadata.sourceSha && metadata.tarball.file && metadata.tarball.sha256,
+        metadata.version &&
+        metadata.sourceSha &&
+        metadata.tarballs.length === metadata.targets.length + 1 &&
+        metadata.tarballs.every((item) => item.file && item.sha256),
       ),
       "release metadata is incomplete",
     );
@@ -55,16 +59,25 @@ runScript(
       "release does not contain both required native targets",
     );
     yield* check(
-      path.basename(metadata.tarball.file) === metadata.tarball.file,
-      "tarball name must be relative",
+      metadata.tarballs.every((item) => path.basename(item.file) === item.file),
+      "archive names must be relative",
+    );
+
+    const expectedArchives = [
+      `compootor-stooart-${metadata.version}.tgz`,
+      ...targets.map((target) => `compootor-stooart-${target}-${metadata.version}.tgz`),
+    ];
+
+    const actualArchives = metadata.tarballs.map((item) => item.file);
+    yield* check(
+      new Set(actualArchives).size === actualArchives.length &&
+        expectedArchives.every((archive) => actualArchives.includes(archive)),
+      "release must contain the root npm package and one package for each supported platform",
     );
 
     const releaseDir = path.dirname(checksumsPath);
 
-    const expectedFiles = new Set([
-      ...targets.map((target) => `stooart-${target}`),
-      metadata.tarball.file,
-    ]);
+    const expectedFiles = new Set(metadata.tarballs.map((item) => item.file));
 
     const checksumsText = yield* attempt(
       "Could not read release checksums",
@@ -91,8 +104,10 @@ runScript(
 
       yield* check(actual === digest, `checksum mismatch for ${file}`);
 
-      if (file === metadata.tarball.file)
-        yield* check(actual === metadata.tarball.sha256, "tarball metadata checksum mismatch");
+      const archive = metadata.tarballs.find((item) => item.file === file);
+
+      if (archive)
+        yield* check(actual === archive.sha256, `archive metadata checksum mismatch for ${file}`);
     }
 
     yield* check(expectedFiles.size === 0, `missing checksums: ${[...expectedFiles].join(", ")}`);

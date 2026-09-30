@@ -1,4 +1,5 @@
-import { Effect, Exit, FileSystem, Path, Schema, Stdio, Stream, Terminal } from "effect";
+import { Effect, Exit, FileSystem, Path, Redacted, Schema, Stdio, Stream, Terminal } from "effect";
+import { Prompt } from "effect/unstable/cli";
 import type { ChildProcessSpawner } from "effect/unstable/process";
 import { TypeSafeClient } from "@compootor/effective-jev";
 import { recommendWithJev } from "../core/jev.ts";
@@ -207,7 +208,9 @@ function journalCommand(
         strategy = "jev";
 
         const apiKey =
-          Bun.env.TYPESAFE_API_KEY !== undefined ? Bun.env.TYPESAFE_API_KEY : yield* readCredential;
+          process.env.TYPESAFE_API_KEY !== undefined
+            ? process.env.TYPESAFE_API_KEY
+            : yield* readCredential;
 
         if (!apiKey)
           recommendation = {
@@ -221,11 +224,11 @@ function journalCommand(
           };
         else {
           const fetchOptions =
-            Bun.env.TYPESAFE_BASE_URL === undefined
+            process.env.TYPESAFE_BASE_URL === undefined
               ? { apiKey, timeout: 10_000, retry: { maxRetries: 0 } }
               : {
                   apiKey,
-                  baseURL: Bun.env.TYPESAFE_BASE_URL,
+                  baseURL: process.env.TYPESAFE_BASE_URL,
                   timeout: 10_000,
                   retry: { maxRetries: 0 },
                 };
@@ -364,7 +367,7 @@ function logPath(args: ReadonlyArray<string>): Effect.Effect<string, LearningFai
   if (args.length === 0)
     return Path.Path.pipe(
       Effect.map((paths) =>
-        paths.join(Bun.env.HOME ?? ".", ".local", "state", "stooart", "outcomes.jsonl"),
+        paths.join(process.env.HOME ?? ".", ".local", "state", "stooart", "outcomes.jsonl"),
       ),
     );
 
@@ -402,15 +405,14 @@ export function command(
     if (name === "jev" && rest[0] === "setup") {
       if (rest.length !== 1) return yield* cliError("cli.options", "expected jev setup");
       const terminal = yield* Terminal.Terminal;
-      yield* terminal
-        .display("TypeSafe API key: ")
-        .pipe(
-          Effect.mapError((cause) =>
-            learningError("cli.print", "unable to write prompt", undefined, cause),
-          ),
-        );
+      const stdio = yield* Stdio.Stdio;
+      const interactive = yield* stdio.stdinIsTerminal;
 
-      const key = yield* terminal.readLine.pipe(
+      const input = interactive
+        ? Prompt.hidden({ message: "TypeSafe API key" }).pipe(Effect.map(Redacted.value))
+        : terminal.readLine;
+
+      const key = yield* input.pipe(
         Effect.map((value) => value.trim()),
         Effect.mapError((cause) =>
           learningError("jev.credentials", "unable to read TypeSafe credential", undefined, cause),

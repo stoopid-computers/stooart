@@ -1,6 +1,6 @@
 {
   "name": "@compootor/stooart",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "imports": {
     "effect": "npm:effect@4.0.0-rc.112"
   },

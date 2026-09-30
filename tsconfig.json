@@ -9,7 +9,7 @@
     "strict": true,
     "noEmit": true,
     "skipLibCheck": true,
-    "types": ["bun", "deno"],
+    "types": ["deno", "node"],
     "paths": {
       "npm:effect@4.0.0-rc.112": ["./node_modules/effect/dist/index.d.ts"]
     },

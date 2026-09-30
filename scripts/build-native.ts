@@ -1,3 +1,4 @@
+import { compile, renderDiagnostics } from "@scriptc/compiler";
 import { Effect, FileSystem, Path, Schema } from "effect";
 import { VERSION } from "../src/version.ts";
 import {
@@ -12,11 +13,17 @@ import {
 
 const PackageIdentity = Schema.Struct({ name: Schema.String, version: Schema.String });
 
+const BuildManifest = Schema.Struct({
+  ...PackageIdentity.fields,
+  devDependencies: Schema.Struct({ "@scriptc/compiler": Schema.String }),
+});
+
 runScript(
   Effect.gen(function* () {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
-    const root = path.resolve(import.meta.dir, "..");
+    const scriptPath = yield* path.fromFileUrl(new URL(import.meta.url));
+    const root = path.resolve(path.dirname(scriptPath), "..");
     const target = `${process.platform}-${process.arch}`;
 
     const manifestText = yield* attempt(
@@ -24,7 +31,7 @@ runScript(
       fs.readFileString(path.join(root, "package.json")),
     );
 
-    const manifest = yield* Schema.decodeEffect(Schema.fromJsonString(PackageIdentity))(
+    const manifest = yield* Schema.decodeEffect(Schema.fromJsonString(BuildManifest))(
       manifestText,
     ).pipe(
       Effect.mapError((cause) => new ScriptError({ message: "Invalid package identity", cause })),
@@ -52,29 +59,87 @@ runScript(
     const binary = path.join(dist, `stooart-${target}`);
     yield* attempt("Could not create dist directory", fs.makeDirectory(dist, { recursive: true }));
 
-    const buildExit = yield* runInherited(
-      [
-        "bun",
-        "build",
-        "--compile",
-        "--target",
-        `bun-${target}`,
-        "--outfile",
-        binary,
-        "src/cli.ts",
-        "--minify",
-        "--no-compile-autoload-dotenv",
-        "--no-compile-autoload-bunfig",
-        "--no-compile-autoload-tsconfig",
-        "--no-compile-autoload-package-json",
-      ],
-      root,
-      "Could not run Bun compile",
+    const workspace = yield* attempt(
+      "Could not create native build workspace",
+      fs.makeTempDirectoryScoped({ directory: "/tmp", prefix: "stooart-build-" }),
     );
 
-    yield* check(buildExit === 0, `Native compilation failed (${buildExit})`);
+    const payload = path.join(workspace, "node_modules", "stooart-runtime");
+    const entry = path.join(workspace, "entry.ts");
+    const executable = path.join(workspace, "stooart");
 
-    const binaryBytes = yield* attempt("Could not read native artifact", fs.readFile(binary));
+    const bundleExit = yield* runInherited(
+      [
+        "pnpm",
+        "exec",
+        "vp",
+        "pack",
+        "src/cli.ts",
+        "--platform",
+        "node",
+        "--format",
+        "esm",
+        "--minify",
+        "--out-dir",
+        payload,
+        "--logLevel",
+        "error",
+      ],
+      root,
+      "Could not bundle native application",
+    );
+
+    yield* check(bundleExit === 0, "Native application bundling failed");
+
+    // The package boundary lets scriptc embed Effect in its supported dynamic runtime.
+    // No application values cross the static/dynamic boundary and no modules load from disk.
+    yield* attempt(
+      "Could not write native payload manifest",
+      fs.writeFileString(
+        path.join(payload, "package.json"),
+        JSON.stringify({
+          name: "stooart-runtime",
+          version: VERSION,
+          type: "module",
+          exports: "./cli.mjs",
+        }),
+      ),
+    );
+    yield* attempt(
+      "Could not write native entry",
+      fs.writeFileString(entry, 'import "stooart-runtime";\n'),
+    );
+
+    const compiled = yield* Effect.tryPromise({
+      try: () =>
+        compile(entry, {
+          outPath: executable,
+          outDir: path.join(workspace, "c"),
+          backend: "c",
+          dynamic: true,
+          optimization: "release",
+          strip: true,
+        }),
+      catch: (cause) => new ScriptError({ message: "scriptc native compilation failed", cause }),
+    });
+
+    if (!compiled.ok)
+      return yield* new ScriptError({
+        message: renderDiagnostics(compiled.diagnostics, compiled.sourceTexts, { color: false }),
+      });
+
+    const version = yield* runPiped(
+      [executable, "--version"],
+      workspace,
+      "Could not run native executable",
+    );
+
+    yield* check(
+      version.exitCode === 0 && version.stdout.trim() === VERSION,
+      "Native executable version check failed",
+    );
+
+    const binaryBytes = yield* attempt("Could not read native artifact", fs.readFile(executable));
     const privatePaths = [root, process.env.HOME ?? process.env.USERPROFILE ?? ""];
 
     for (const privatePath of privatePaths) {
@@ -98,14 +163,6 @@ runScript(
         }
 
         if (found) {
-          yield* attempt(
-            "Could not discard unsafe native artifact",
-            fs.remove(binary, { force: true }),
-          );
-          yield* attempt(
-            "Could not discard unsafe provenance",
-            fs.remove(`${binary}.build.json`, { force: true }),
-          );
           yield* check(false, "Native artifact contains a machine-specific path");
         }
       }
@@ -124,6 +181,13 @@ runScript(
     );
 
     yield* attempt(
+      "Could not invalidate previous provenance",
+      fs.remove(`${binary}.build.json`, { force: true }),
+    );
+    yield* attempt("Could not install native artifact", fs.copyFile(executable, binary));
+    yield* attempt("Could not mark native artifact executable", fs.chmod(binary, 0o755));
+
+    yield* attempt(
       "Could not write native provenance",
       fs.writeFileString(
         `${binary}.build.json`,
@@ -134,11 +198,18 @@ runScript(
             sourceSha: commit.exitCode === 0 ? commit.stdout.trim() : null,
             dirty: status.exitCode !== 0 || status.stdout.trim() !== "",
             sha256: yield* sha256(binaryBytes),
+            compiler: {
+              name: "scriptc",
+              version: manifest.devDependencies["@scriptc/compiler"],
+              backend: compiled.backend,
+              dynamic: true,
+            },
+            bytes: binaryBytes.length,
           },
           null,
           2,
         )}\n`,
       ),
     );
-  }),
+  }).pipe(Effect.scoped),
 );

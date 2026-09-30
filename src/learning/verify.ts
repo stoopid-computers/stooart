@@ -1,5 +1,6 @@
 import { Effect, Exit, FileSystem, Path, Schema } from "effect";
 import type { ChildProcessSpawner } from "effect/unstable/process";
+import { sha256 } from "./hash.ts";
 import { VerificationRequestSchema, type Verification } from "./contracts.ts";
 import { appendEvent, decisionFor, newId, readJournal } from "./journal.ts";
 import {
@@ -11,8 +12,7 @@ import {
 } from "./errors.ts";
 import { runCheck, type CheckResult } from "./check-runner.ts";
 
-export const sha256 = (input: string | Uint8Array): string =>
-  new Bun.CryptoHasher("sha256").update(input).digest("hex");
+export { sha256 };
 
 export function artifactHash(
   path: string,
@@ -62,7 +62,7 @@ export function artifactHash(
     if (stat.type !== "Directory")
       return yield* artifactError("artifact.type", "artifact must be a regular file or directory");
 
-    const hash = new Bun.CryptoHasher("sha256").update("stooart-tree-v1\n");
+    const hashParts = ["stooart-tree-v1\n"];
 
     const walk = (directory: string, relative: string): Effect.Effect<void, ArtifactError> =>
       Effect.gen(function* () {
@@ -109,7 +109,7 @@ export function artifactHash(
             );
 
           if (child.type === "Directory") {
-            hash.update(JSON.stringify(["directory", key]) + "\n");
+            hashParts.push(JSON.stringify(["directory", key]) + "\n");
             yield* walk(absolute, key);
           } else if (child.type === "File") {
             const bytes = yield* fs
@@ -120,7 +120,7 @@ export function artifactHash(
                 ),
               );
 
-            hash.update(JSON.stringify(["file", key, child.mode & 0o777, sha256(bytes)]) + "\n");
+            hashParts.push(JSON.stringify(["file", key, child.mode & 0o777, sha256(bytes)]) + "\n");
           } else
             return yield* artifactError(
               "artifact.type",
@@ -131,7 +131,7 @@ export function artifactHash(
 
     yield* walk(path, "");
 
-    return hash.digest("hex");
+    return sha256(hashParts.join(""));
   });
 }
 

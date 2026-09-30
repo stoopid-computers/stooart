@@ -6,14 +6,14 @@
 
 ## Get started
 
-The 0.1.0 packages are not published yet. The install commands below will work after release. npm includes the compiled router. JSR provides a Deno launcher and requires a native `stooart` executable on `PATH`.
+The published v0.1.0 release keeps its original package contents. v0.1.1 uses a small root package and matching per-platform npm packages. JSR provides a Deno launcher and requires a native `stooart` executable on `PATH`.
 
-### npm with Bun
+### npm with Node.js
 
-The npm package includes the compiled router for macOS arm64 and Linux x64. Install it with Bun 1.4.2 or newer:
+The npm package installs a small Node.js launcher and selects the matching macOS arm64 or Linux x64 executable through optional platform packages. Use Node.js 24 or newer:
 
 ```sh
-bun add --global @compootor/stooart
+npm install --global @compootor/stooart
 stooart --version
 ```
 
@@ -74,7 +74,7 @@ stooart connects directly to TypeSafe, the service that runs Jev. Its client sof
 Install stooart first. The commands below work in Bash and zsh on macOS or Linux. Save the [two-worker connection request](examples/jev-setup.json) as `jev-setup.json` in your working folder before the connection check.
 
 1. Create a TypeSafe account and [API key](https://console.typesafe.ai/keys).
-2. Run `stooart jev setup`. Paste the key at the hidden prompt and press Enter. From this checkout, use `bun run dev -- jev setup`. The key does not appear in shell history or command output.
+2. Run `stooart jev setup`. Paste the key at the hidden prompt and press Enter. From this checkout, use `pnpm dev -- jev setup`. The key does not appear in shell history or command output.
 
    This saves the key under `~/.config/stooart/credentials` with private file permissions. If `XDG_CONFIG_HOME` is set, stooart uses `$XDG_CONFIG_HOME/stooart/credentials` instead.
 
@@ -84,7 +84,7 @@ Install stooart first. The commands below work in Bash and zsh on macOS or Linux
    stooart route jev-setup.json --jev
    ```
 
-   From the checkout, use `bun run dev -- route examples/jev-setup.json --jev` without copying the file.
+   From the checkout, use `pnpm dev -- route examples/jev-setup.json --jev` without copying the file.
 
 The [connection-check example](examples/jev-setup.json) contains two fictional, eligible workers. You do not need to install them. The check confirms that Jev can return a routing decision.
 
@@ -124,11 +124,11 @@ You can continue without Jev by omitting `--jev`. stooart then uses configured p
 <details>
 <summary><strong>Keep the connection available</strong> · sessions, native builds, and custom endpoints</summary>
 
-The saved key is available to stooart across terminal sessions and processes. To delete it, run `stooart jev remove`, or `bun run dev -- jev remove` from the checkout. Keep the key out of repositories and chat.
+The saved key is available to stooart across terminal sessions and processes. To delete it, run `stooart jev remove`, or `pnpm dev -- jev remove` from the checkout. Keep the key out of repositories and chat.
 
 If `TYPESAFE_API_KEY` is set in the process environment, stooart uses that value instead of the saved key. This is useful for managed agent hosts that inject secrets. If the variable is set to an empty value, stooart treats the key as unavailable and does not fall back to the saved key.
 
-The native executable reads the process environment and the saved credential file. It does not load `.env` files or another CLI's saved login. Bun development may load `.env` files automatically; that does not establish native setup. For a built CLI, use the same request with the host binary, such as `./dist/stooart-darwin-arm64 route examples/jev-setup.json --jev`.
+The native executable reads the process environment and the saved credential file. It does not load `.env` files or another CLI's saved login. Development uses the same environment rules. For a built CLI, use the same request with the host binary, such as `./dist/stooart-darwin-arm64 route examples/jev-setup.json --jev`.
 
 Leave `TYPESAFE_BASE_URL` unset for the default service at `https://api.typesafe.ai`. If an administrator supplied a trusted gateway, use its API root; stooart appends `/v1/systemone`. Do not add that endpoint path yourself or silently replace an existing gateway. The configured service receives the API key and routing metadata.
 
@@ -149,8 +149,8 @@ When neither source is configured, ask the owner to run `stooart jev setup` or s
 ## Route a task
 
 ```sh
-bun run dev -- route examples/task.json
-cat examples/task.json | bun run dev -- route -
+pnpm dev -- route examples/task.json
+cat examples/task.json | pnpm dev -- route -
 ```
 
 A request has two parts: `task` describes the work, and `workers` lists available choices. Keep worker access and availability current.
@@ -249,7 +249,7 @@ Use `recall` to inspect matching procedures or `--recipes` to opt into their rec
 <details>
 <summary><strong>Use the evidence commands</strong> · input files and journal</summary>
 
-Below, `stooart` means an installed native CLI. From the checkout, use `bun run dev --` in its place. Create `verification.json` and `linked-outcome.json` using the [request formats](docs/learning.md); they are not included fixtures.
+Below, `stooart` means an installed CLI. From the checkout, use `pnpm dev --` in its place. Create `verification.json` and `linked-outcome.json` using the [request formats](docs/learning.md); they are not included fixtures.
 
 ```sh
 stooart route examples/learning-task.json --journal ./journal.jsonl
@@ -289,8 +289,8 @@ Read the full request formats and runnable local exercise in [`docs/learning.md`
 <summary><strong>Keep a simple outcome log</strong> · separate from verified journal evidence</summary>
 
 ```sh
-bun run dev -- record examples/outcome.json --log ./outcomes.jsonl
-bun run dev -- history --log ./outcomes.jsonl
+pnpm dev -- record examples/outcome.json --log ./outcomes.jsonl
+pnpm dev -- history --log ./outcomes.jsonl
 ```
 
 Without `--log`, the path is `~/.local/state/stooart/outcomes.jsonl`. New files use mode 0600. These records store caller reports, including any `verified` label; they do not prove checks ran and never feed recipe routing. Use `--journal` for linked evidence.
@@ -302,28 +302,28 @@ Without `--log`, the path is `~/.local/state/stooart/outcomes.jsonl`. New files 
 
 Open an issue before changing the routing contract or package layout. For a focused fix, send a pull request that describes the input, the observed result, and the intended result. Test behavior through the CLI or launcher; keep tests independent of internal helper structure. Never include a live TypeSafe key, worker credential, or private journal.
 
-Run `bun run check` before submitting. If you change native runtime or packaging, also build and test the binary on a supported host. Name that host in the pull request.
+Run `pnpm check` before submitting. If you change native runtime or packaging, also build and test the binary on a supported host. Name that host in the pull request.
 
 ### Build from source
 
-Use Bun 1.4.2 or newer:
+Use Node.js 24 or newer and pnpm 12.3.4:
 
 ```sh
 git clone https://github.com/stoopid-computers/stooart.git
 cd stooart
-bun install --frozen-lockfile
-bun run check
-bun run dev -- route examples/task.json
+pnpm install --frozen-lockfile
+pnpm check
+pnpm dev -- route examples/task.json
 ```
 
-`bun run check` checks formatting, lint, types, GitHub workflows, and source tests. Run `bun run fmt` first if you need to format edited files. To build and exercise the standalone executable for macOS arm64 or Linux x64, run:
+`pnpm check` runs Vite+ formatting, lint, types, GitHub workflow checks, and CLI/launcher tests. Run `pnpm fmt` first if you need to format edited files. To build and exercise the standalone executable for macOS arm64 or Linux x64, run:
 
 ```sh
-bun run build:native
-bun run test:native
+pnpm build:native
+pnpm test:native
 ```
 
-The native executable embeds Bun and does not need Bun, Node, or `node_modules` to run. It reads its environment and the saved Jev credential file; it does not load local `.env` files. The JSR launcher does not download or compile the native executable.
+The standalone executable uses scriptc's C backend with embedded QuickJS to run the bundled Effect application. It needs no installed Node.js or Bun. This is scriptc's dynamic mode, not a static translation of the whole application into C. It reads its environment and the saved Jev credential file; it does not load local `.env` files. The npm launcher requires Node.js 24 or newer. The JSR launcher does not download or compile the executable.
 
 See [`docs/releasing.md`](docs/releasing.md) for package checks, provenance, private local archives, checksum verification, and release requirements. Local preview archives are private and must never be published.
 

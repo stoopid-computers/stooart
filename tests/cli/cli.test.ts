@@ -1,4 +1,6 @@
-import { afterAll, expect, test } from "bun:test";
+import { afterAll, expect, test } from "vitest";
+import { createServer as createHttpServer } from "node:http";
+import { Schema } from "effect";
 import packageJson from "../../package.json";
 import { join, mkdtemp, readFile, rm, stat, symlink, writeFile } from "../platform.ts";
 import { run } from "./process.ts";
@@ -42,6 +44,53 @@ const outcome = {
 
 const directory = await mkdtemp("stooart-cli-test-");
 
+async function createServer(options: {
+  hostname: string;
+  port: number;
+  fetch: (request: Request) => Promise<Response> | Response;
+}) {
+  const server = createHttpServer(async (incoming, outgoing) => {
+    const chunks: Buffer[] = [];
+
+    for await (const chunk of incoming) chunks.push(Buffer.from(chunk));
+
+    // SAFETY: the server is listening on an ephemeral TCP port before requests are handled.
+    const request = new Request(
+      `http://${options.hostname}:${(server.address() as { port: number }).port}${incoming.url}`,
+      {
+        method: incoming.method,
+        headers: Object.entries(incoming.headers).flatMap(([key, value]) =>
+          value === undefined
+            ? []
+            : Array.isArray(value)
+              ? value.map((item) => [key, item])
+              : [[key, value]],
+        ),
+        body: ["GET", "HEAD"].includes(incoming.method ?? "") ? undefined : Buffer.concat(chunks),
+      },
+    );
+
+    const response = await options.fetch(request);
+    outgoing.writeHead(response.status, Object.fromEntries(response.headers));
+    outgoing.end(Buffer.from(await response.arrayBuffer()));
+  });
+
+  await new Promise<void>((resolve) => server.listen(options.port, options.hostname, resolve));
+
+  const address = server.address();
+
+  if (!address || Schema.is(Schema.String)(address))
+    throw new Error("HTTP fixture did not bind a TCP port");
+
+  return {
+    port: address.port,
+    stop: (_closeActiveConnections?: boolean) =>
+      new Promise<void>((resolve, reject) =>
+        server.close((error) => (error ? reject(error) : resolve())),
+      ),
+  };
+}
+
 afterAll(() => rm(directory));
 
 test("reports the package manifest version", async () => {
@@ -76,7 +125,7 @@ test("saves a key for a later process and routes with it using private file perm
 
   let authorization = "";
 
-  const server = Bun.serve({
+  const server = await createServer({
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
@@ -177,7 +226,7 @@ test("records and reads an outcome without modifying the input", async () => {
 test("uses effective-jev against a local HTTP fixture and transmits no task goal or paths", async () => {
   let sent = "";
 
-  const server = Bun.serve({
+  const server = await createServer({
     hostname: "127.0.0.1",
     port: 0,
     async fetch(request) {
@@ -223,7 +272,7 @@ test("uses effective-jev against a local HTTP fixture and transmits no task goal
 }, 15_000);
 
 test("returns local on a provider failure without exposing its response body", async () => {
-  const server = Bun.serve({
+  const server = await createServer({
     hostname: "127.0.0.1",
     port: 0,
     fetch: () => new Response("private provider diagnostic", { status: 429 }),
@@ -259,7 +308,7 @@ test("returns typed local results for malformed or low-confidence Jev responses"
       expected: "low_confidence",
     },
   ]) {
-    const server = Bun.serve({
+    const server = await createServer({
       hostname: "127.0.0.1",
       port: 0,
       fetch: () =>
@@ -302,7 +351,7 @@ test("returns typed local results for malformed or low-confidence Jev responses"
 });
 
 test("honors an explicit worker preference without contacting Jev", async () => {
-  const server = Bun.serve({
+  const server = await createServer({
     hostname: "127.0.0.1",
     port: 0,
     fetch: () => new Response("unexpected Jev request", { status: 500 }),
@@ -332,35 +381,86 @@ test("honors an explicit worker preference without contacting Jev", async () => 
   }
 });
 
-test("applies routing policy gates at the CLI boundary", async () => {
-  const base = task.task;
-  const worker = task.workers[0];
+const policyCases = [
+  {
+    name: "keeps unresolved tasks local",
+    task: { ...task.task, unresolved: true },
+    workers: [task.workers[0]],
+    executor: "local",
+  },
+  {
+    name: "keeps tasks without acceptance criteria local",
+    task: { ...task.task, acceptance: [" "] },
+    workers: [task.workers[0]],
+    executor: "local",
+  },
+  {
+    name: "keeps undelegated research local",
+    task: { ...task.task, kind: "research", delegationRequested: false },
+    workers: [task.workers[0]],
+    executor: "local",
+  },
+  { name: "keeps missing tasks local", task: null, workers: [task.workers[0]], executor: "local" },
+  {
+    name: "routes deterministic tasks to the script executor",
+    task: { ...task.task, kind: "deterministic" },
+    workers: [],
+    executor: "script",
+  },
+  {
+    name: "keeps tasks local when no provider matches",
+    task: { ...task.task, allowedProviders: ["other-provider"] },
+    workers: [task.workers[0]],
+    executor: "local",
+  },
+  {
+    name: "keeps unavailable workers out of routing",
+    task: task.task,
+    workers: [{ ...task.workers[0], available: false }],
+    executor: "local",
+  },
+  {
+    name: "keeps explicit-only workers out of automatic routing",
+    task: task.task,
+    workers: [{ ...task.workers[0], explicitOnly: true }],
+    executor: "local",
+  },
+  {
+    name: "keeps workers without required tools out of routing",
+    task: task.task,
+    workers: [{ ...task.workers[0], tools: [] }],
+    executor: "local",
+  },
+  {
+    name: "keeps duplicate worker profiles local",
+    task: task.task,
+    workers: [task.workers[0], task.workers[0]],
+    executor: "local",
+  },
+  {
+    name: "keeps the local executor out of worker routing",
+    task: task.task,
+    workers: [{ ...task.workers[0], executor: "local" }],
+    executor: "local",
+  },
+  {
+    name: "keeps missing explicit preferences local",
+    task: { ...task.task, preferredWorkerId: "missing" },
+    workers: [task.workers[0]],
+    executor: "local",
+  },
+  {
+    name: "allows an explicit preference for an explicit-only worker",
+    task: { ...task.task, preferredWorkerId: task.workers[0].id },
+    workers: [{ ...task.workers[0], explicitOnly: true }],
+    executor: "agent-runner",
+  },
+] as const;
 
-  const cases = [
-    [{ ...base, unresolved: true }, [worker], "local"],
-    [{ ...base, acceptance: [" "] }, [worker], "local"],
-    [{ ...base, kind: "research", delegationRequested: false }, [worker], "local"],
-    [null, [worker], "local"],
-    [{ ...base, kind: "deterministic" }, [], "script"],
-    [{ ...base, allowedProviders: ["other-provider"] }, [worker], "local"],
-    [base, [{ ...worker, available: false }], "local"],
-    [base, [{ ...worker, explicitOnly: true }], "local"],
-    [base, [{ ...worker, tools: [] }], "local"],
-    [base, [worker, worker], "local"],
-    [base, [{ ...worker, executor: "local" }], "local"],
-    [{ ...base, preferredWorkerId: "missing" }, [worker], "local"],
-    [
-      { ...base, preferredWorkerId: worker.id },
-      [{ ...worker, explicitOnly: true }],
-      "agent-runner",
-    ],
-  ] as const;
-
-  for (const [taskInput, workers, executor] of cases) {
-    const result = await run(["route", "-"], JSON.stringify({ task: taskInput, workers }));
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout).executor).toBe(executor);
-  }
+test.each(policyCases)("$name", async ({ task: taskInput, workers, executor }) => {
+  const result = await run(["route", "-"], JSON.stringify({ task: taskInput, workers }));
+  expect(result.code).toBe(0);
+  expect(JSON.parse(result.stdout).executor).toBe(executor);
 });
 
 test("worker cooldown expires without overriding explicit preferences", async () => {
@@ -406,7 +506,7 @@ test("rejects truncated and symlink journals through history", async () => {
   const truncatedResult = await run(["history", "--journal", truncated]);
   expect(truncatedResult.code).toBe(1);
   const linked = join(directory, "linked-history.jsonl");
-  await Bun.write(linked, "");
+  await writeFile(linked, "");
   const symlinkPath = join(directory, "symlink-history.jsonl");
   await symlink(linked, symlinkPath);
   const linkedResult = await run(["history", "--journal", symlinkPath]);

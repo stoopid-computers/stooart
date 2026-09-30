@@ -1,4 +1,5 @@
 import { Data, Effect, Exit, Schema, type Cause } from "effect";
+import type { Scope } from "effect";
 
 export interface LaunchOptions {
   /** Defaults to `stooart` on PATH. */
@@ -27,7 +28,14 @@ const LaunchErrorBase: new (
 
 export class LaunchError extends LaunchErrorBase {}
 
-const MissingExecutable = Schema.Struct({ code: Schema.Literal("ENOENT") });
+export class SpawnFailure extends Data.TaggedError("SpawnFailure")<{ readonly cause: unknown }> {}
+
+const MissingExecutable = Schema.Union([
+  Schema.Struct({ code: Schema.Literal("ENOENT") }),
+  Schema.Struct({
+    reason: Schema.Struct({ cause: Schema.Struct({ code: Schema.Literal("ENOENT") }) }),
+  }),
+]);
 
 const launchError = (executable: string, cause: unknown): LaunchError =>
   new LaunchError({
@@ -39,56 +47,54 @@ const launchError = (executable: string, cause: unknown): LaunchError =>
   });
 
 export interface SpawnedProcess {
-  readonly exited: Promise<LaunchResult>;
-  kill(signal: "SIGINT" | "SIGTERM"): void;
+  readonly exited: Effect.Effect<LaunchResult, SpawnFailure>;
+  kill(signal: "SIGINT" | "SIGTERM"): Effect.Effect<void, SpawnFailure>;
 }
 
-export interface SpawnAdapter {
-  spawn(executable: string, options: LaunchOptions): SpawnedProcess;
+export interface SpawnAdapter<R = never> {
+  spawn(
+    executable: string,
+    options: LaunchOptions,
+  ): Effect.Effect<SpawnedProcess, SpawnFailure, R | Scope.Scope>;
   addSignalListener(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
   removeSignalListener(signal: "SIGINT" | "SIGTERM", listener: () => void): void;
 }
 
 /** Manage process signals, cancellation, and exit status for either runtime adapter. */
-export const launchWith = (
-  adapter: SpawnAdapter,
+export const launchWith = <R>(
+  adapter: SpawnAdapter<R>,
   options: LaunchOptions = {},
-): Effect.Effect<LaunchResult, LaunchError> => {
+): Effect.Effect<LaunchResult, LaunchError, R> => {
   const executable = options.executable ?? "stooart";
 
-  return Effect.acquireUseRelease(
-    Effect.try({
-      try: () => {
-        const child = adapter.spawn(executable, options);
-        const interrupt = () => child.kill("SIGINT");
-        const terminate = () => child.kill("SIGTERM");
-        adapter.addSignalListener("SIGINT", interrupt);
-        adapter.addSignalListener("SIGTERM", terminate);
+  return Effect.scoped(
+    Effect.acquireUseRelease(
+      adapter.spawn(executable, options).pipe(
+        Effect.mapError((error) => launchError(executable, error.cause)),
+        Effect.map((child) => {
+          const interrupt = () => Effect.runFork(child.kill("SIGINT"));
+          const terminate = () => Effect.runFork(child.kill("SIGTERM"));
 
-        return { child, interrupt, terminate, running: true };
-      },
-      catch: (cause) => launchError(executable, cause),
-    }),
-    (resource) =>
-      Effect.tryPromise({
-        try: () => resource.child.exited,
-        catch: (cause) => launchError(executable, cause),
-      }).pipe(
-        Effect.tap(() =>
-          Effect.sync(() => {
-            resource.running = false;
-          }),
-        ),
+          adapter.addSignalListener("SIGINT", interrupt);
+          adapter.addSignalListener("SIGTERM", terminate);
+
+          return { child, interrupt, terminate, running: true };
+        }),
       ),
-    ({ child, interrupt, terminate, running }) =>
-      Effect.try({
-        try: () => {
+      (resource) =>
+        resource.child.exited.pipe(
+          Effect.mapError((error) => launchError(executable, error.cause)),
+          Effect.tap(() =>
+            Effect.sync(() => {
+              resource.running = false;
+            }),
+          ),
+        ),
+      ({ child, interrupt, terminate, running }) =>
+        Effect.sync(() => {
           adapter.removeSignalListener("SIGINT", interrupt);
           adapter.removeSignalListener("SIGTERM", terminate);
-
-          if (running) child.kill("SIGTERM");
-        },
-        catch: (cause) => launchError(executable, cause),
-      }),
+        }).pipe(Effect.andThen(running ? Effect.ignore(child.kill("SIGTERM")) : Effect.void)),
+    ),
   );
 };
