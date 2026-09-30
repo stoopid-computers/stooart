@@ -163,7 +163,14 @@ runScript(
         }
 
         if (found) {
-          yield* check(false, "Native artifact contains a machine-specific path");
+          const suffix = new TextDecoder()
+            .decode(binaryBytes.subarray(index + needle.length, index + needle.length + 240))
+            .split("\0")[0];
+
+          yield* check(
+            false,
+            `Native artifact contains a machine-specific path: <build-root>${suffix}`,
+          );
         }
       }
     }
