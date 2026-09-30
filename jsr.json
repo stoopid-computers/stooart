@@ -1,0 +1,32 @@
+{
+  "name": "@compootor/stooart",
+  "version": "0.1.0",
+  "imports": {
+    "effect": "npm:effect@4.0.0-rc.112"
+  },
+  "exports": {
+    ".": "./launcher/jsr-mod.ts",
+    "./cli": "./launcher/jsr-cli.ts"
+  },
+  "publish": {
+    "include": [
+      "launcher/jsr-mod.ts",
+      "launcher/lifecycle.ts",
+      "launcher/jsr-cli.ts",
+      "README.md",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES",
+      "docs/learning.md",
+      "docs/releasing.md",
+      "examples/task.json",
+      "examples/jev-setup.json",
+      "examples/learning-task.json",
+      "examples/outcome.json",
+      "skills/delegate/SKILL.md",
+      "skills/delegate/references/request.json",
+      "skills/learn/SKILL.md",
+      "docs/assets/routing-boundary.svg",
+      "docs/assets/evidence-loop.svg"
+    ]
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "task": {
+    "id": "ci-fixture-check",
+    "kind": "implementation",
+    "goal": "Repair a failing CI test and verify the suite",
+    "acceptance": ["The targeted test command passes"],
+    "allowedPaths": ["src/fixture.ts", "tests/fixture.test.ts"],
+    "requiredTools": ["edit", "test"],
+    "unresolved": false,
+    "delegationRequested": true,
+    "allowedProviders": ["fixture-provider"],
+    "features": {
+      "family": "ci",
+      "scope": "small",
+      "context": "existing",
+      "proof": "tests"
+    }
+  },
+  "workers": [
+    {
+      "id": "ci-test-runner",
+      "executor": "ci-runner",
+      "model": "test-repair-model",
+      "provider": "fixture-provider",
+      "available": true,
+      "tools": ["edit", "test"],
+      "effort": "medium",
+      "explicitOnly": false,
+      "priority": 10
+    },
+    {
+      "id": "review-and-test-runner",
+      "executor": "review-runner",
+      "model": "review-focused-model",
+      "provider": "fixture-provider",
+      "available": true,
+      "tools": ["edit", "test"],
+      "effort": "high",
+      "explicitOnly": false,
+      "priority": 20
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+node_modules/
+dist/
+release/
+.stooart-publish/
+.stooart-stage/
+.stooart-release/
+.env
+.env.*
+!.env.example
+*.tgz
+.DS_Store
+# Runtime evidence and machine-specific configuration are not repository content.
+*.jsonl
+*.jsonl.lock/
+.stooart/
+stooart.local.*

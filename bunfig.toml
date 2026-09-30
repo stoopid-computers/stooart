@@ -1,0 +1,10 @@
+[run]
+bun = true
+shell = "bun"
+noOrphans = true
+
+[install]
+exact = true
+
+[test]
+root = "tests"

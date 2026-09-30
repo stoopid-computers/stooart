@@ -1,0 +1,9 @@
+{
+  "taskId": "validate-input",
+  "attemptId": "attempt-1",
+  "workerId": "configured-worker",
+  "status": "verified",
+  "elapsedMs": 42000,
+  "checks": ["Input validation tests passed"],
+  "correctionCount": 0
+}

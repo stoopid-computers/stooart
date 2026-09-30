@@ -1,0 +1,26 @@
+{
+  "task": {
+    "id": "scoped-change",
+    "kind": "implementation",
+    "goal": "Add the specified validation branch",
+    "acceptance": ["The focused validation check passes"],
+    "allowedPaths": ["src/validate.ts", "tests/validate.test.ts"],
+    "requiredTools": ["edit", "test"],
+    "unresolved": false,
+    "delegationRequested": true,
+    "allowedProviders": ["example-provider"]
+  },
+  "workers": [
+    {
+      "id": "example-worker",
+      "executor": "agent-runner",
+      "model": "example-model",
+      "provider": "example-provider",
+      "available": true,
+      "tools": ["edit", "test"],
+      "effort": "medium",
+      "explicitOnly": false,
+      "priority": 10
+    }
+  ]
+}

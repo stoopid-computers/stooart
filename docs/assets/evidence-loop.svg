@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 760" role="img" aria-labelledby="title desc">
+  <title id="title">stooart evidence loop</title>
+  <desc id="desc">A decision is journaled, a caller performs the work, an explicit verifier checks an artifact, and a linked outcome can make a procedure reusable for later retrieval.</desc>
+  <style>
+    text { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #172033; }
+    .label { font-size: 22px; font-weight: 700; }
+    .small { font-size: 17px; }
+    .box { fill: #f6f8fb; stroke: #52627a; stroke-width: 2; }
+    .accent { fill: #e7f5ef; stroke: #1f7a56; stroke-width: 2; }
+    .arrow { stroke: #52627a; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+  </style>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M 0 0 L 10 5 L 0 10 z" fill="#52627a"/></marker></defs>
+  <rect width="520" height="760" rx="18" fill="#fff"/>
+  <rect class="box" x="60" y="24" width="400" height="100" rx="14"/>
+  <text class="label" x="260" y="62" text-anchor="middle">1. Decision</text><text class="small" x="260" y="92" text-anchor="middle">journaled IDs and policy facts</text>
+  <path class="arrow" d="M260 124 V160"/>
+  <rect class="box" x="60" y="160" width="400" height="100" rx="14"/>
+  <text class="label" x="260" y="198" text-anchor="middle">2. Caller work</text><text class="small" x="260" y="228" text-anchor="middle">worker changes the permitted files</text>
+  <path class="arrow" d="M260 260 V296"/>
+  <rect class="accent" x="60" y="296" width="400" height="145" rx="14"/>
+  <text class="label" x="260" y="335" text-anchor="middle">3. Explicit verify</text><text class="small" x="260" y="366" text-anchor="middle">run the named command</text><text class="small" x="260" y="392" text-anchor="middle">hash artifact before and after</text><text class="small" x="260" y="418" text-anchor="middle">write a receipt</text>
+  <path class="arrow" d="M260 441 V477"/>
+  <rect class="box" x="60" y="477" width="400" height="100" rx="14"/>
+  <text class="label" x="260" y="515" text-anchor="middle">4. Outcome</text><text class="small" x="260" y="545" text-anchor="middle">link decision and receipt</text>
+  <path class="arrow" d="M260 577 V613"/>
+  <rect class="box" x="60" y="613" width="400" height="100" rx="14"/>
+  <text class="label" x="260" y="651" text-anchor="middle">5. Recipe reuse</text><text class="small" x="260" y="681" text-anchor="middle">recent evidence, matching inputs</text>
+  <text class="small" x="260" y="742" text-anchor="middle">Retrieval recommends. It never executes steps.</text>
+</svg>
