@@ -109,7 +109,7 @@ overrides:
   '@effect/platform-node-shared': 4.0.0-rc.112
 
 patchedDependencies:
-  '@scriptc/compiler@0.1.7': 669629d0a605d311fd7576672c68013f3f1dfbf21c4908253f7a45acae4e9111
+  '@scriptc/compiler@0.1.7': 0a3f51e620d238bb0fed5de338342908b776e3439c0630cd9226258ddb228fab
   '@scriptc/runtime@0.1.7': 6dd253c968c4941a3536b40e2c6d4316d78cb0ad4e29b7efabc7fa2f5a8f9b2a
 
 importers:
@@ -137,7 +137,7 @@ importers:
         version: 1.79.0
       '@scriptc/compiler':
         specifier: 0.1.7
-        version: 0.1.7(patch_hash=669629d0a605d311fd7576672c68013f3f1dfbf21c4908253f7a45acae4e9111)
+        version: 0.1.7(patch_hash=0a3f51e620d238bb0fed5de338342908b776e3439c0630cd9226258ddb228fab)
       '@types/deno':
         specifier: 2.7.0
         version: 2.7.0
@@ -1852,7 +1852,7 @@ snapshots:
     dependencies:
       '@redis/client': 6.2.1
 
-  '@scriptc/compiler@0.1.7(patch_hash=669629d0a605d311fd7576672c68013f3f1dfbf21c4908253f7a45acae4e9111)':
+  '@scriptc/compiler@0.1.7(patch_hash=0a3f51e620d238bb0fed5de338342908b776e3439c0630cd9226258ddb228fab)':
     dependencies:
       '@scriptc/runtime': 0.1.7(patch_hash=6dd253c968c4941a3536b40e2c6d4316d78cb0ad4e29b7efabc7fa2f5a8f9b2a)
       typescript: 7.0.2
